@@ -107,8 +107,14 @@ Se o clone falhar, a mensagem é genérica de propósito: confira o PAT, o escop
 ## Célula 4 — gate: a suíte de testes
 
 ```python
-!python -m pytest tests/ -q
+!VQCDEPTH_ALLOW_DOWNLOAD=1 python -m pytest tests/ -q
 ```
+
+A variável `VQCDEPTH_ALLOW_DOWNLOAD=1` **importa**: sem ela, os 18 testes que
+dependem dos datasets da UCI são *pulados* num clone novo (que não tem cache
+local), e o gate ficaria mais fraco do que parece — justamente a carga dos três
+datasets e os hashes golden dos splits reais. Com a variável, a suíte roda
+completa: **177 testes, ~55 s** (verificado num clone limpo).
 
 **Se isto falhar, não rode o grid.** É aqui que se prova que a versão
 vetorizada do circuito dá o mesmo valor *e o mesmo gradiente* do laço por

@@ -103,7 +103,10 @@ modelos do mesmo (dataset, seed) recebem literalmente os mesmos indices, e de
 que nao ha vazamento do teste para o pre-processamento.
 """),
 code("""
-!python -m pytest tests/ -q
+# VQCDEPTH_ALLOW_DOWNLOAD=1 libera os testes que baixam os datasets da UCI.
+# Sem isso eles sao PULADOS (18 testes), e o gate fica mais fraco do que
+# parece: justamente a carga dos datasets e os hashes golden do split real.
+!VQCDEPTH_ALLOW_DOWNLOAD=1 python -m pytest tests/ -q
 """),
 
 md("""
