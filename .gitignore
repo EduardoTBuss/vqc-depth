@@ -1,0 +1,26 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# dados baixados e saidas de execucao NUNCA vao para o repo
+data/cache/
+data/raw/
+data/processed/
+outputs/
+results/
+predictions/
+checkpoints/
+figures/
+tables/
+logs/
+runs/
+env.json
+
+# scratch dos agentes
+_scratch_*.py

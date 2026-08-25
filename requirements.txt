@@ -1,0 +1,21 @@
+# Estudo de profundidade de VQC (ERAMIA-RS 2026) - pinado para reprodutibilidade.
+# Desenvolvido em Python 3.13 (local) e testado no Colab (Python 3.12).
+#
+# CPU basta: 4 qubits em default.qubit; GPU nao traz ganho nenhum aqui.
+# NAO peca runtime com GPU no Colab.
+#
+# As versoes REALMENTE usadas em cada rodada sao gravadas em <outdir>/env.json
+# pelo proprio pacote - e isso, nao este arquivo, que vai para o paper.
+
+pennylane==0.44.1      # QNode, AngleEmbedding, default.qubit, parameter broadcasting
+autograd==1.8.0        # backend de diferenciacao da interface autograd do PennyLane
+torch>=2.5             # apenas a MLP baseline (CPU)
+scikit-learn==1.7.0    # MinMaxScaler, split estratificado, metricas
+ucimlrepo==0.0.7       # carga dos 3 datasets UCI
+numpy>=2.2
+pandas>=2.2
+pyarrow>=17            # predictions em parquet
+scipy>=1.15            # wilcoxon
+matplotlib>=3.10       # somente na fase de figuras (--part plot)
+tabulate>=0.9          # tabelas em markdown
+pytest>=8.0            # suite de testes (gate antes do grid)
