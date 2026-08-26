@@ -192,6 +192,46 @@ import vqcdepth
 print('vqcdepth', vqcdepth.__version__)
 print('loaded from', Path(vqcdepth.__file__).parent)
 
+# Did pip change a library that this kernel had ALREADY imported? Colab imports
+# numpy before the first cell runs, so a pip upgrade or downgrade leaves the new
+# Python files loading against the C extension still in memory. numpy then dies
+# with things like
+#     AttributeError: 'numpy.ufunc' object has no attribute '__module__'
+# from inside numpy itself. No user code can recover from that: the process has
+# to be replaced. Catch it here, with an instruction, instead of three cells
+# later with a traceback that points at the wrong place.
+import importlib.metadata as _meta
+
+_stale = []
+for _dist, _mod in [('numpy', 'numpy'), ('pandas', 'pandas'),
+                    ('scipy', 'scipy'), ('scikit-learn', 'sklearn'),
+                    ('matplotlib', 'matplotlib')]:
+    _live = sys.modules.get(_mod)
+    if _live is None:
+        continue                      # not imported yet: the next import is clean
+    try:
+        _disk = _meta.version(_dist)
+    except _meta.PackageNotFoundError:
+        continue
+    if getattr(_live, '__version__', _disk) != _disk:
+        _stale.append((_dist, _live.__version__, _disk))
+
+if _stale:
+    print()
+    print('=' * 72)
+    print('RESTART THE RUNTIME. pip replaced a library this session had already')
+    print('imported, so the version in memory and the version on disk disagree:')
+    for _d, _mem, _dsk in _stale:
+        print(f'    {_d}: {_mem} in memory, {_dsk} on disk')
+    print()
+    print('  Runtime  ->  Restart session,  then run the notebook again.')
+    print()
+    print('Nothing is lost by restarting: Drive is remounted in cell 1, the')
+    print('repository is re-cloned in cell 2, and the grid resumes from Drive,')
+    print('so every run already finished is skipped.')
+    print('=' * 72)
+    raise SystemExit
+
 # If requirements.txt silently failed to install, this is where it surfaces,
 # rather than two cells later in the middle of a training run.
 for _m in ('pennylane', 'torch', 'sklearn', 'pandas', 'pyarrow', 'scipy',

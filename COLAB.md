@@ -103,6 +103,23 @@ hides the one message that says what to do. Keep the raise out of the handler.
 
 `pip install -r requirements.txt` and `pip install -e .`.
 
+### If a cell asks you to restart the runtime
+
+Colab preinstalls numpy and imports it before the first cell runs. If pip then
+installs a different version, the new Python files load against the C extension
+already in memory and numpy raises, from inside itself,
+`AttributeError: 'numpy.ufunc' object has no attribute '__module__'`. No user
+code can recover from that; only a fresh process can.
+
+For that reason `requirements.txt` sets **no upper bound on numpy**: a cap makes
+pip downgrade whatever Colab ships and causes exactly this crash, in exchange
+for silencing a cosmetic numba warning. If pip changes a loaded library anyway,
+cell 3 detects the mismatch, prints which library drifted and stops.
+
+Restarting costs nothing: *Runtime -> Restart session*, then run again. Drive is
+remounted, the repository is re-cloned, and the grid resumes from Drive, so
+every run that already finished is skipped.
+
 ## Cell 4 — gate: the test suite
 
 ```python

@@ -12,13 +12,17 @@ autograd==1.8.0        # differentiation backend of PennyLane's autograd interfa
 torch>=2.5             # the MLP baseline only (CPU)
 scikit-learn==1.7.0    # MinMaxScaler, stratified split, metrics
 ucimlrepo==0.0.7       # loads the 3 UCI datasets
-# numpy is capped below 2.3 on purpose: Colab preinstalls numba, which requires
-# numpy<2.3. An open ">=2.2" makes pip pull the newest numpy and print a
-# dependency-conflict ERROR on every Colab run. 2.2.x satisfies both.
-numpy>=2.2,<2.3
-# pandas is capped below 3.0: pandas 3 changes copy-on-write and string dtype
-# defaults, which is churn this study has no reason to absorb mid-experiment.
-pandas>=2.2,<3
+# NO upper bound on numpy, and that is deliberate. Colab preinstalls numpy and
+# imports it before the first cell runs. An upper bound makes pip DOWNGRADE it
+# underneath the live kernel, after which the new Python files load against the
+# C extension already in memory and numpy dies with
+#   AttributeError: 'numpy.ufunc' object has no attribute '__module__'
+# which no user code can recover from. A capped numpy traded a cosmetic numba
+# warning for a fatal crash. Verified green on 2.2.6 and 2.4.6.
+# If pip changes it anyway, the install cell detects the drift and asks for a
+# runtime restart instead of failing three cells later.
+numpy>=2.1
+pandas>=2.2
 pyarrow>=17            # predictions as parquet
 scipy>=1.15            # wilcoxon
 matplotlib>=3.10       # figures phase only (--part plot)
