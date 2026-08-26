@@ -18,6 +18,16 @@ runs the test gate, measures a pilot and fires the grid.
 
 **Use a CPU runtime.** Four qubits on `default.qubit` will not touch a GPU.
 
+**Two things are yours before *Runtime -> Run all*, and nothing else works without
+them:**
+1. **Secret `GH_PAT`** (key icon in the sidebar): a GitHub *fine-grained PAT*
+   scoped to the `vqc-depth` repository, **`Contents: Read-only`** and nothing
+   else. Turn *Notebook access* on. Cell 2 stops here if it is missing.
+2. Cell 1 asks for **Google Drive authorisation**.
+
+**Expected cost (measured locally): ~82 min there -> ~2 to 2.7 h here.** Cell 5
+re-measures it on the machine you actually got, before the grid is fired.
+
 Everything is written to `{DRIVE}`. Each run is **its own file**, written
 atomically: if the session dies, reopen and re-run the same cell — it continues
 where it stopped, losing at most the run in flight.
