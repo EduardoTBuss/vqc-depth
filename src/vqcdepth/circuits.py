@@ -11,7 +11,7 @@ Qubit ordering / conventions (read before touching anything)
   the MOST significant bit of the computational-basis label).  This is the
   opposite of Qiskit's little-endian convention; if any number here is ever
   compared against a Qiskit table, wire order must be reversed there.
-* The readout is ``<Z>`` on wire 0 -- i.e. the FIRST feature's qubit.  The ring
+* The readout is ``<Z>`` on wire 0 -- i.e. the FIRST feature's qubit.  The chain
   of CNOTs is what lets information from wires 1..3 reach wire 0, so a circuit
   with 0 entangling blocks would be blind to features 1..3 by construction.
 * p(y=1) = (1 + <Z_0>) / 2, so <Z_0> = +1 -> p = 1 and <Z_0> = -1 -> p = 0.
@@ -20,8 +20,8 @@ Circuit (n_layers = L)
 ----------------------
     RY(x_0) w0 ; RY(x_1) w1 ; RY(x_2) w2 ; RY(x_3) w3      <- encoding, ONCE
     repeat L times:
-        for j in 0..3:  RY(theta[l,j,0]) w_j ; RZ(theta[l,j,1]) w_j
-        for j in 0..3:  CNOT(w_j -> w_{(j+1) % 4})          <- ring
+        for j in 0..3:  RZ(theta[l,j,0]) w_j ; RY(theta[l,j,1]) w_j
+        CNOT(w3->w2) ; CNOT(w2->w1) ; CNOT(w1->w0)          <- chain TOWARD w0
     measure <Z_0>
 
 There is NO data re-uploading: the encoding block appears exactly once, before
@@ -29,33 +29,39 @@ the first variational layer.  (``vqc_c`` in the qnn-benchmark repo DOES
 re-upload; that is a different circuit and was not ported.)
 
 Weight tensor shape: ``(n_layers, N_QUBITS, 2)`` -> 8 params per layer.
-    index [..., 0] -> RY angle,  index [..., 1] -> RZ angle.
+    index [..., 0] -> RZ angle,  index [..., 1] -> RY angle.
 
-MEASURED CAVEAT -- 5 angles of the LAST layer are INERT
--------------------------------------------------------
-Pulling the readout back (Heisenberg) through the final ring of CNOTs gives
-exactly ``U_ring^dag Z_0 U_ring = Z_1 Z_2 Z_3`` (verified against the 16x16
-matrices).  Two consequences for the LAST layer only:
+WHY THIS EXACT ORDER AND THIS EXACT CHAIN DIRECTION (measured, 2026-08-25)
+--------------------------------------------------------------------------
+Both choices exist to make EVERY angle count.  Pulling the readout back
+(Heisenberg) through the final entangling block decides which angles are dead:
 
-* the effective observable is diagonal, so it COMMUTES with the last layer's
-  4 RZ rotations -> 4 dead angles;
-* the effective observable acts as the IDENTITY on wire 0, so any final
-  single-qubit rotation on wire 0 is invisible -> the last layer's RY on wire
-  0 is a 5th dead angle.
+* With a CNOT **ring** (``j -> (j+1) % 4``) the pullback is
+  ``U_ring^dag Z_0 U_ring = Z_1 Z_2 Z_3``: it acts as the IDENTITY on wire 0,
+  so every last-layer rotation on wire 0 becomes invisible.
+* With the CNOT **chain toward the readout** (3->2->1->0) the pullback is
+  ``Z_0 Z_1 Z_2 Z_3``, which acts non-trivially on ALL four wires.
+* The pullback is always DIAGONAL (a product of Z's), so whatever rotation sits
+  LAST before the entangler must not commute with Z.  ``RZ`` does commute, so
+  ``RZ`` must come FIRST and ``RY`` last inside the layer.
 
-Measured (``_scratch_check_train.py``): those 5 angles have gradient ~1e-17
-and scrambling them changes the output by < 1e-16.  Effective parameter counts
+Measured effective angle counts (perturb each angle by 0.9 rad, count those
+that move the output by more than 1e-12):
 
-    vqc1  3 of  8      vqc2  11 of 16      vqc4  27 of 32
+    ansatz                          L=1     L=2     L=4
+    RY,RZ + ring   (first draft)    3/8    11/16   27/32
+    RZ,RY + ring                    6/8    14/16   30/32
+    RY only + chain 3->2->1->0      4/4     8/8    16/16
+    RZ,RY + chain 3->2->1->0  <--   8/8    16/16   32/32   THIS ONE
 
-against the nominal 8 / 16 / 32 in ``config.n_parameters``.  This is a
-property of the ansatz AS SPECIFIED, not an implementation bug; it is left
-untouched and reported, because changing it changes every number in the study
-and that decision belongs to the researcher.  If the intent was "8 effective
-angles per layer", the cheapest fixes are (a) apply RZ BEFORE RY inside the
-layer -- which is what ``vqc_c`` does in qnn-benchmark -- and/or (b) put the
-CNOT ring BEFORE the rotations in each layer, so the last rotations sit
-between the ring and the measurement.
+The chosen ansatz is the only measured variant where nominal == effective at
+every depth, so ``config.n_parameters`` (8 / 16 / 32) is honest and the
+progression is exactly 1:2:4.  It also keeps two rotations per qubit, so the
+state is NOT restricted to real amplitudes (an ``RY``-only ansatz would be).
+
+``tests/test_ansatz.py`` pins these numbers: if the layer template or the chain
+direction is ever changed, it fails on purpose and forces a conscious decision
+instead of silently changing every number in the study.
 
 Simulation
 ----------
@@ -119,10 +125,12 @@ def make_qnode(n_layers: int, device: object | None = None):
         # --- variational layers -----------------------------------------
         for layer in range(n_layers):
             for j in range(config.N_QUBITS):
-                qml.RY(weights[layer, j, 0], wires=j)
-                qml.RZ(weights[layer, j, 1], wires=j)
-            for j in range(config.N_QUBITS):
-                qml.CNOT(wires=[j, (j + 1) % config.N_QUBITS])
+                qml.RZ(weights[layer, j, 0], wires=j)
+                qml.RY(weights[layer, j, 1], wires=j)
+            # CNOT chain running TOWARD the readout wire (3->2->1->0).  The
+            # direction is not cosmetic: see the note at the top of the module.
+            for j in range(config.N_QUBITS - 1, 0, -1):
+                qml.CNOT(wires=[j, j - 1])
         return qml.expval(qml.PauliZ(0))
 
     circuit.n_layers = n_layers

@@ -36,7 +36,7 @@ tuning de MLP.
 | Seeds | `range(10)` |
 | Qubits | 4 |
 | Encoding | angle, `x_i → RY(x_i)`, aplicado uma vez |
-| Ansatz | `RY(θ) → RZ(θ) → bloco CNOT em anel`, repetido 1/2/4× |
+| Ansatz | `RZ(θ) → RY(θ) → cadeia de CNOT 3→2→1→0`, repetido 1/2/4× |
 | Medição | `⟨Z₀⟩ → p(y=1) = (1 + ⟨Z⟩)/2` |
 | Loss / otimizador | BCE / Adam — **idênticos para VQC e MLP** |
 | Épocas / batch | 100 / 16 |
@@ -68,51 +68,62 @@ Dois pontos que **precisam ser declarados no artigo**:
   linhas; são imputados pela **mediana do treino**, e a contagem por partição é
   registrada em cada execução.
 
-## ⚠️ Nota crítica sobre o ansatz: parâmetros efetivos < parâmetros nominais
+## O ansatz — e por que exatamente este
 
-Descoberto e verificado em 25/08/2026, **antes de rodar o grid definitivo**.
+A camada variacional é `RZ(θ) → RY(θ)` em cada qubit, seguida de uma **cadeia
+de CNOTs correndo em direção ao qubit de leitura** (`3→2→1→0`), repetida 1, 2
+ou 4 vezes. **A única diferença entre `vqc1`, `vqc2` e `vqc4` é o número de
+repetições.**
 
-No ansatz `RY(θ) → RZ(θ) → anel de CNOT`, a propagação de Heisenberg do
-observável pelo anel final dá:
+Tanto a ordem das rotações quanto a direção da cadeia foram escolhidas **por
+medição**, em 25/08/2026, e existem para que **todo parâmetro conte**.
 
-```
-U_anel† Z₀ U_anel = Z₁Z₂Z₃
-```
+Puxando o observável de volta (Heisenberg) pelo bloco de emaranhamento final
+decide-se quais ângulos são inertes:
 
-Consequência: na **última camada**, os 4 `RZ` comutam com esse observável
-efetivo (que é diagonal) e o `RY` do qubit 0 também não o afeta (o observável
-age como identidade no fio 0). **Cinco parâmetros da última camada são
-inertes**, em qualquer profundidade:
+- Com um **anel** de CNOTs, `U† Z₀ U = Z₁Z₂Z₃` — que age como **identidade no
+  fio 0**, matando toda rotação da última camada nesse fio.
+- Com a **cadeia em direção à leitura** (`3→2→1→0`), `U† Z₀ U = Z₀Z₁Z₂Z₃`, que
+  age de forma não trivial nos **quatro** fios.
+- O operador puxado de volta é **sempre diagonal** (produto de Z). Logo, a
+  rotação que fica por **último** dentro da camada não pode comutar com Z.
+  `RZ` comuta — por isso `RZ` vem primeiro e `RY` por último.
 
-| modelo | nominais | **efetivos** |
-|---|---:|---:|
-| `vqc1` | 8 | **3** |
-| `vqc2` | 16 | **11** |
-| `vqc4` | 32 | **27** |
+Contagem de parâmetros **efetivos** (perturba-se cada ângulo em 0,9 rad e
+conta-se quantos movem a saída mais que 1e-12):
 
-Verificado numericamente por duas vias independentes: perturbar cada parâmetro
-em 0,9 rad muda a saída em menos de 1e-12 para exatamente esses cinco, e o
-gradiente neles é da ordem de 1e-17.
+| ansatz | L=1 | L=2 | L=4 |
+|---|---|---|---|
+| `RY,RZ + anel` (primeiro rascunho) | 3/8 | 11/16 | 27/32 |
+| `RZ,RY + anel` | 6/8 | 14/16 | 30/32 |
+| `só RY + cadeia 3→2→1→0` | 4/4 | 8/8 | 16/16 |
+| **`RZ,RY + cadeia 3→2→1→0`** ← adotado | **8/8** | **16/16** | **32/32** |
 
-**Isto não é um bug** — é propriedade do ansatz como especificado. Mas tem duas
-consequências que precisam ser tratadas:
+O ansatz adotado é a única variante medida em que **nominal == efetivo em toda
+profundidade**. Isso importa por três razões:
 
-1. a tabela de parâmetros **superestima a capacidade** dos modelos;
-2. o `vqc1`, com apenas **3 graus de liberdade efetivos**, pode confundir
-   "efeito da profundidade" com "camada final degenerada" — o que atinge a RQ1
-   diretamente.
+1. a contagem de parâmetros do artigo (8 / 16 / 32) é **honesta**;
+2. a progressão é exatamente **1:2:4**, então nenhuma profundidade é
+   handicapada por uma camada final degenerada — é o que torna "profundidade"
+   uma variável independente limpa;
+3. mantém duas rotações por qubit, então o estado **não** fica restrito a
+   amplitudes reais (um ansatz só com `RY` ficaria).
 
-Alternativas medidas (parâmetros efetivos, `L=1 / 2 / 4`):
+O primeiro rascunho (`RY→RZ→anel`) tinha **5 ângulos mortos por circuito**, o
+que deixava o `vqc1` com apenas **3 graus de liberdade efetivos**. O efeito era
+visível no piloto: no Banknote — o dataset *fácil* — o `vqc1` ficava em F1
+≈ 0,51–0,56, quase aleatório, contra ≈ 0,93 do `vqc4`. Com o ansatz adotado, o
+mesmo piloto dá `vqc1` ≈ 0,80–0,85, `vqc2` ≈ 0,86–0,88 e `vqc4` ≈ 0,94–0,96.
 
-| ansatz | efetivos |
-|---|---|
-| `RY → RZ → anel` (atual) | 3 / 11 / 27 |
-| `RZ → RY → anel` | **6 / 14 / 30** |
-| `anel → RY → RZ` | 1 / 7 / 23 |
+Nota de método, verificada: **um Hadamard antes de um encoding `RY` seria
+redundante** — `H + RY(x)` é exatamente `RY(x + π/2)` (diferença 8e-16 em 200
+pontos). O Hadamard só é necessário quando o encoding é de **fase** (`RZ`),
+porque `RZ` sobre `|0⟩` não faz nada: `|0⟩` é autoestado de Z e a medição de Z
+não enxerga fase.
 
-Há um **teste-sentinela** na suíte que fixa esses números: se o ansatz for
-alterado, ele quebra e força uma decisão consciente, em vez de mudar todos os
-resultados em silêncio.
+`tests/test_ansatz.py` fixa todos esses números. Se a camada ou a direção da
+cadeia mudarem, ele falha **de propósito** e força uma decisão consciente, em
+vez de mover silenciosamente todos os resultados do estudo.
 
 ## Protocolo de comparação justa
 

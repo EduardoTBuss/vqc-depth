@@ -122,11 +122,21 @@ def test_backprop_gradient_matches_central_finite_differences(n_layers):
         g_num[ix] = (float(cost(pnp.array(wp, requires_grad=True)))
                      - float(cost(pnp.array(wm, requires_grad=True)))) / (2 * eps)
 
-    active = np.abs(g_ana) > 1e-12
-    rel = np.abs(g_ana[active] - g_num[active]) / np.maximum(np.abs(g_ana[active]), 1e-8)
-    assert rel.max() < 1e-6, (
+    # MIXED tolerance, not purely relative.  Central differences with eps=1e-6
+    # carry an absolute error floor of ~1e-10 in float64, so dividing by a
+    # genuinely small gradient blows the relative error up while the gradient
+    # is perfectly correct.  Since the ansatz was fixed (2026-08-25) EVERY
+    # angle is live, and some are legitimately small -- hence atol.
+    # Measured worst case over L=1,2,4: 1.2e-10 absolute, ~100x inside atol.
+    atol, rtol = 1e-8, 1e-6
+    err = np.abs(g_ana - g_num)
+    bound = atol + rtol * np.abs(g_ana)
+    worst = int(np.argmax(err - bound))
+    assert np.all(err <= bound), (
         f"L={n_layers}: analytic gradient disagrees with central finite "
-        f"differences, max relative error {rel.max():.3e}"
+        f"differences. Worst angle (flat index {worst}): analytic="
+        f"{g_ana.ravel()[worst]:.6e} numeric={g_num.ravel()[worst]:.6e} "
+        f"abs_err={err.ravel()[worst]:.3e}"
     )
 
 
@@ -159,20 +169,21 @@ def test_backprop_gradient_matches_parameter_shift(n_layers):
 # 2. analytic anchor
 # ======================================================================
 def test_zero_weights_one_layer_matches_closed_form():
-    """With all angles zero and L=1, <Z_0> = cos(x1) cos(x2) cos(x3), exactly.
+    """With all angles zero and L=1, <Z_0> = prod_j cos(x_j), exactly.
 
-    Derivation: the single ring of CNOTs maps Z_0 -> Z_1 Z_2 Z_3 (Heisenberg),
-    the encoded state is a product state, and <Z_j> = cos(x_j) for RY(x_j)|0>.
-    Note that x_0 does NOT appear -- the readout qubit's own feature is invisible
-    at depth 1 with zero weights.  Anchors wire order, rotation sense and the
-    ring direction all at once.
+    Derivation: the CNOT chain 3->2->1->0 maps Z_0 -> Z_0 Z_1 Z_2 Z_3
+    (Heisenberg), the encoded state is a product state, and <Z_j> = cos(x_j)
+    for RY(x_j)|0>.  ALL FOUR features appear -- including x_0.  (With a CNOT
+    ring the pullback would be Z_1 Z_2 Z_3 and the readout qubit's own feature
+    would be invisible at depth 1; that is one more reason the chain was
+    chosen.)  Anchors wire order, rotation sense and chain direction at once.
     """
     circuit = circuits.make_qnode(1)
     w = pnp.array(np.zeros(circuits.weights_shape(1)), requires_grad=True)
     X = np.random.default_rng(4242).uniform(0.0, np.pi, (16, config.N_QUBITS))
 
     got = np.asarray(circuits.eval_batch(circuit, w, X), dtype=np.float64)
-    expected = np.cos(X[:, 1]) * np.cos(X[:, 2]) * np.cos(X[:, 3])
+    expected = np.prod(np.cos(X), axis=1)
     np.testing.assert_allclose(got, expected, rtol=0, atol=1e-12)
 
 

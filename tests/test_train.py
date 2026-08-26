@@ -289,11 +289,17 @@ def test_no_checkpoint_directory_means_no_disk_writes(split, tmp_path):
 # changes.  When that happens ON PURPOSE: regenerate them by running this test
 # and pasting the reported values, note the date, and remember that any grid
 # already on disk was produced by the OLD code and cannot be mixed with the new.
+# Regenerated on 2026-08-25 for the ansatz RZ -> RY + CNOT chain 3->2->1->0
+# (see tests/test_ansatz.py for why that ansatz was chosen).  Regenerate ON
+# PURPOSE, never to silence a failure: if these move, the circuit, the
+# optimizer or the RNG changed, and every number of the study moved with them.
+# Sanity check at regeneration time: the "mlp" row did NOT change, which is
+# exactly right -- the baseline does not depend on the ansatz.
 GOLDEN = {
     #        best_epoch, best_val_f1,         best_val_loss,       final_train_loss
-    "vqc1": (3, 0.9,                0.5276245304990551, 0.521374767196214),
-    "vqc2": (5, 0.7272727272727273, 0.5109093703150295, 0.37340822396420953),
-    "vqc4": (5, 0.9433962264150944, 0.39346800293961465, 0.30969368453798296),
+    "vqc1": (2, 0.8,                0.6510286300030975, 0.5398471419895048),
+    "vqc2": (4, 0.9642857142857143, 0.43319807775184366, 0.33670227582832274),
+    "vqc4": (2, 0.9824561403508771, 0.4185669579361487, 0.28313208350692604),
     "mlp":  (5, 0.5641025641025641, 0.6110279803912959, 0.4843255658937544),
 }
 
