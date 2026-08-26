@@ -37,10 +37,10 @@ roughly 60 optimiser steps per epoch on Banknote. Cell 5 measures the real cost
 on whichever machine Colab hands you.
 """),
 
-md("## 1 - Drive"),
+md("## 1 - Drive and the run() helper"),
 code(f"""
 from google.colab import drive
-import os
+import os, subprocess, sys
 
 drive.mount('/content/drive')
 
@@ -50,6 +50,38 @@ for sub in ['runs', 'results', 'predictions', 'checkpoints', 'figures', 'tables'
 
 print('persisting to:', DRIVE)
 print('already on Drive:', len(os.listdir(f'{{DRIVE}}/runs')), 'files in runs/')
+
+
+def run(args, log=None, env=None, check=True):
+    \"\"\"Run a command, stream its output live, optionally copy it to a log file,
+    and STOP the notebook if it fails.
+
+    This exists because `!command` does not stop anything: IPython runs it, and
+    execution moves to the next cell whatever the exit code was. With a plain
+    `!`, a failing test gate or a crashed grid looks exactly like a successful
+    one, and 'Run all' happily carries on. Every command that matters goes
+    through here instead. It also replaces `... | tee file`, which depends on a
+    shell and fails silently when the target directory is missing.
+    \"\"\"
+    print('$', ' '.join(str(a) for a in args), flush=True)
+    _env = {{**os.environ, **(env or {{}})}}
+    fh = open(log, 'w', encoding='utf-8') if log else None
+    proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            text=True, bufsize=1, env=_env)
+    try:
+        for line in proc.stdout:
+            print(line, end='', flush=True)
+            if fh:
+                fh.write(line)
+    finally:
+        proc.wait()
+        if fh:
+            fh.close()
+    if check and proc.returncode != 0:
+        print(f'\\n>>> command FAILED with exit code {{proc.returncode}}.')
+        print('>>> Stopping here on purpose: do not run later cells on a broken run.')
+        raise SystemExit(proc.returncode)
+    return proc.returncode
 """),
 
 md("""
@@ -112,9 +144,11 @@ if not _pat:
     print('described above and re-run this cell.')
     raise SystemExit
 
-!rm -rf /content/{REPO}
+import os, shutil
+REPO_DIR = f'/content/{REPO}'
+shutil.rmtree(REPO_DIR, ignore_errors=True)
 _url = f'https://{GH_USER}:{_pat}@github.com/{GH_USER}/{REPO}.git'
-r = subprocess.run(['git', 'clone', '--quiet', _url, f'/content/{REPO}'],
+r = subprocess.run(['git', 'clone', '--quiet', _url, REPO_DIR],
                    capture_output=True, text=True)
 del _pat, _url
 if r.returncode != 0:
@@ -126,16 +160,44 @@ if r.returncode != 0:
     print('  - the repository name is still vqc-depth')
     raise SystemExit
 
-%cd /content/{REPO}
-!git remote set-url origin https://github.com/{GH_USER}/{REPO}.git
-!git log --oneline -1
+os.chdir(REPO_DIR)
+print('working directory:', os.getcwd())
+run(['git', 'remote', 'set-url', 'origin',
+     f'https://github.com/{GH_USER}/{REPO}.git'])
+run(['git', 'log', '--oneline', '-1'])
 """),
 
 md("## 3 - Dependencies"),
 code("""
-!pip install -q -r requirements.txt
-!pip install -q -e .
-import vqcdepth; print('vqcdepth', vqcdepth.__version__)
+run([sys.executable, '-m', 'pip', 'install', '-q', '-r', 'requirements.txt'])
+run([sys.executable, '-m', 'pip', 'install', '-q', '-e', '.'])
+
+# An editable install drops a .pth file into site-packages, and .pth files are
+# only read by the `site` module when the interpreter STARTS. This kernel is
+# already running, so without the two lines below the package stays invisible
+# and `import vqcdepth` raises ModuleNotFoundError even though pip reported
+# success. The package uses a src layout, so the working directory does not
+# help either. site.main() re-processes the .pth now; prepending src/ is a
+# fallback that does not depend on how pip chose to install.
+import importlib, site, sys
+from pathlib import Path
+
+site.main()
+_src = str(Path.cwd() / 'src')
+if _src not in sys.path:
+    sys.path.insert(0, _src)
+importlib.invalidate_caches()
+
+import vqcdepth
+print('vqcdepth', vqcdepth.__version__)
+print('loaded from', Path(vqcdepth.__file__).parent)
+
+# If requirements.txt silently failed to install, this is where it surfaces,
+# rather than two cells later in the middle of a training run.
+for _m in ('pennylane', 'torch', 'sklearn', 'pandas', 'pyarrow', 'scipy',
+           'matplotlib', 'tabulate', 'ucimlrepo'):
+    importlib.import_module(_m)
+print('all runtime dependencies import cleanly')
 """),
 
 md("""
@@ -151,7 +213,11 @@ inert.
 datasets are skipped on a fresh clone, and the gate is weaker than it looks.
 """),
 code("""
-!VQCDEPTH_ALLOW_DOWNLOAD=1 python -m pytest tests/ -q
+# VQCDEPTH_ALLOW_DOWNLOAD goes through the environment rather than as a shell
+# prefix: the prefix is not portable and, worse, fails silently.
+run([sys.executable, '-m', 'pytest', 'tests/', '-q'],
+    env={'VQCDEPTH_ALLOW_DOWNLOAD': '1'})
+print('Gate passed. The grid may run.')
 """),
 
 md("""
@@ -165,8 +231,9 @@ code("""
 import time
 LOG = f'{DRIVE}/logs/pilot_{time.strftime("%Y%m%d_%H%M%S")}.log'
 
-!python -m vqcdepth --part train --outdir "{DRIVE}" \\
-    --datasets banknote --models vqc4 --seeds 0 1 --epochs 5 2>&1 | tee "{LOG}"
+run([sys.executable, '-m', 'vqcdepth', '--part', 'train', '--outdir', DRIVE,
+     '--datasets', 'banknote', '--models', 'vqc4', '--seeds', '0', '1',
+     '--epochs', '5'], log=LOG)
 """),
 code("""
 # Extrapolation from what was just measured; nothing here is guessed.
@@ -198,7 +265,7 @@ for pat in ['runs/banknote__vqc4__seed0[01]*', 'predictions/banknote__vqc4__seed
 for d in glob.glob(f'{DRIVE}/checkpoints/banknote__vqc4__seed0[01]'):
     shutil.rmtree(d); print('removed', os.path.basename(d))
 
-!python -m vqcdepth --part status --outdir "{DRIVE}"
+run([sys.executable, '-m', 'vqcdepth', '--part', 'status', '--outdir', DRIVE])
 """),
 
 md("""
@@ -211,7 +278,8 @@ code("""
 import time
 LOG = f'{DRIVE}/logs/grid_{time.strftime("%Y%m%d_%H%M%S")}.log'
 
-!python -m vqcdepth --part train --outdir "{DRIVE}" 2>&1 | tee "{LOG}"
+run([sys.executable, '-m', 'vqcdepth', '--part', 'train', '--outdir', DRIVE],
+    log=LOG)
 """),
 md("""
 ### 6b - Optional: split the grid
@@ -219,9 +287,9 @@ md("""
 Each run is its own file, so there is no race between runtimes.
 """),
 code("""
-# !python -m vqcdepth --part train --outdir "{DRIVE}" --datasets banknote
-# !python -m vqcdepth --part train --outdir "{DRIVE}" --datasets blood
-# !python -m vqcdepth --part train --outdir "{DRIVE}" --datasets mammographic
+# for _ds in ['banknote', 'blood', 'mammographic']:
+#     run([sys.executable, '-m', 'vqcdepth', '--part', 'train',
+#          '--outdir', DRIVE, '--datasets', _ds])
 """),
 
 md("""
@@ -230,9 +298,8 @@ md("""
 All of these work on a **partial grid**.
 """),
 code("""
-!python -m vqcdepth --part rebuild --outdir "{DRIVE}"
-!python -m vqcdepth --part tables  --outdir "{DRIVE}"
-!python -m vqcdepth --part plot    --outdir "{DRIVE}"
+for _part in ['rebuild', 'tables', 'plot']:
+    run([sys.executable, '-m', 'vqcdepth', '--part', _part, '--outdir', DRIVE])
 """),
 code("""
 import pandas as pd

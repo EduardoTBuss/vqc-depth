@@ -64,6 +64,21 @@ plt.rcParams.update(
 
 # -- shared infrastructure ----------------------------------------------
 
+def _boxplot_label_kw() -> str:
+    """Name of the boxplot tick-label argument for the installed matplotlib.
+
+    matplotlib deprecated ``labels`` in 3.9, renamed it to ``tick_labels``, and
+    REMOVED the old name in 3.11. requirements.txt has no upper bound on
+    matplotlib, so the running version decides. Getting this wrong does not
+    crash the run: ``generate_all`` catches the TypeError and merely warns, so
+    four figures would quietly go missing from a finished grid.
+    """
+    import inspect
+    import matplotlib.axes
+    params = inspect.signature(matplotlib.axes.Axes.boxplot).parameters
+    return "tick_labels" if "tick_labels" in params else "labels"
+
+
 def _warn(msg: str) -> None:
     print(f"[figures] warning: {msg}")
 
@@ -174,8 +189,8 @@ def _boxplot_by_model(outdir, metric_col: str, ylabel: str, name: str) -> Path |
             ax.set_title(ds)
             continue
         any_drawn = True
-        bp = ax.boxplot(data, labels=ticks, showmeans=True, widths=0.6,
-                         patch_artist=True)
+        bp = ax.boxplot(data, showmeans=True, widths=0.6, patch_artist=True,
+                         **{_boxplot_label_kw(): ticks})
         for patch, c in zip(bp["boxes"], colors):
             patch.set_facecolor(c)
             patch.set_alpha(0.35)
@@ -313,7 +328,7 @@ def plot_gradient_norm_curves(outdir) -> Path | None:
     Exploratory only (RQ1 is about F1 vs depth): a qualitative look at whether
     deeper circuits optimize worse. Not confirmatory without a dedicated test.
     """
-    return _mean_std_curves(outdir, "gradient_norm", "Norma do gradiente",
+    return _mean_std_curves(outdir, "gradient_norm", "Gradient norm",
                              "gradient_norm_curves")
 
 
@@ -465,7 +480,8 @@ def plot_training_time_vs_model(outdir) -> Path | None:
         return None
 
     fig, ax = plt.subplots(figsize=FIGSIZE_SINGLE)
-    bp = ax.boxplot(data, labels=ticks, showmeans=True, widths=0.6, patch_artist=True)
+    bp = ax.boxplot(data, showmeans=True, widths=0.6, patch_artist=True,
+                    **{_boxplot_label_kw(): ticks})
     for patch, c in zip(bp["boxes"], colors):
         patch.set_facecolor(c)
         patch.set_alpha(0.35)
@@ -667,14 +683,23 @@ def generate_all(outdir) -> list[Path]:
     """Run every `plot_*` function and return the PDFs actually produced. Each
     plotter is isolated so one failure never blocks the remaining figures."""
     produced: list[Path] = []
+    crashed: list[str] = []
     for fn in _ALL_PLOTS:
         try:
             path = fn(outdir)
         except Exception as e:  # extra guard beyond the internal None returns
+            crashed.append(fn.__name__)
             _warn(f"'{fn.__name__}' failed unexpectedly ({type(e).__name__}: {e}); skipping.")
             continue
         if path is not None:
             produced.append(path)
     print(f"[figures] {len(produced)}/{len(_ALL_PLOTS)} figures generated in "
           f"'{Path(outdir) / 'figures'}'.")
+    if crashed:
+        # A figure returning None is normal on a partial grid (not enough seeds
+        # yet). A figure RAISING is not: it means a library incompatibility or a
+        # bug, and it must not look the same as a partial grid.
+        _warn(f"{len(crashed)} figure(s) crashed rather than skipped: "
+              f"{', '.join(crashed)}. This is a defect, not a partial grid.")
+    generate_all.crashed = crashed
     return produced

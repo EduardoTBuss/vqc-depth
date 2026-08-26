@@ -1,21 +1,26 @@
-# Estudo de profundidade de VQC (ERAMIA-RS 2026) - pinado para reprodutibilidade.
-# Desenvolvido em Python 3.13 (local) e testado no Colab (Python 3.12).
+# VQC depth study (ERAMIA-RS 2026) - pinned for reproducibility.
+# Developed on Python 3.13 (local) and tested on Colab (Python 3.12/3.13).
 #
-# CPU basta: 4 qubits em default.qubit; GPU nao traz ganho nenhum aqui.
-# NAO peca runtime com GPU no Colab.
+# CPU is enough: 4 qubits on default.qubit; a GPU buys nothing here.
+# Do NOT request a GPU runtime on Colab.
 #
-# As versoes REALMENTE usadas em cada rodada sao gravadas em <outdir>/env.json
-# pelo proprio pacote - e isso, nao este arquivo, que vai para o paper.
+# The versions ACTUALLY used in a run are recorded in <outdir>/env.json by the
+# package itself - that file, not this one, is what belongs in the paper.
 
-pennylane==0.44.1      # QNode, AngleEmbedding, default.qubit, parameter broadcasting
-autograd==1.8.0        # backend de diferenciacao da interface autograd do PennyLane
-torch>=2.5             # apenas a MLP baseline (CPU)
-scikit-learn==1.7.0    # MinMaxScaler, split estratificado, metricas
-ucimlrepo==0.0.7       # carga dos 3 datasets UCI
-numpy>=2.2
-pandas>=2.2
-pyarrow>=17            # predictions em parquet
+pennylane==0.44.1      # QNode, default.qubit, parameter broadcasting
+autograd==1.8.0        # differentiation backend of PennyLane's autograd interface
+torch>=2.5             # the MLP baseline only (CPU)
+scikit-learn==1.7.0    # MinMaxScaler, stratified split, metrics
+ucimlrepo==0.0.7       # loads the 3 UCI datasets
+# numpy is capped below 2.3 on purpose: Colab preinstalls numba, which requires
+# numpy<2.3. An open ">=2.2" makes pip pull the newest numpy and print a
+# dependency-conflict ERROR on every Colab run. 2.2.x satisfies both.
+numpy>=2.2,<2.3
+# pandas is capped below 3.0: pandas 3 changes copy-on-write and string dtype
+# defaults, which is churn this study has no reason to absorb mid-experiment.
+pandas>=2.2,<3
+pyarrow>=17            # predictions as parquet
 scipy>=1.15            # wilcoxon
-matplotlib>=3.10       # somente na fase de figuras (--part plot)
-tabulate>=0.9          # tabelas em markdown
-pytest>=8.0            # suite de testes (gate antes do grid)
+matplotlib>=3.10       # figures phase only (--part plot)
+tabulate>=0.9          # markdown tables
+pytest>=8.0            # test suite (the gate before the grid)
