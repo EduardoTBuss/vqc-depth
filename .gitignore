@@ -24,3 +24,7 @@ env.json
 
 # agent scratch files
 _scratch_*.py
+
+# the paper folder is versioned content, never generated output: keep it out of
+# the rules above, which match figures/ and tables/ at ANY depth
+!paper/**
