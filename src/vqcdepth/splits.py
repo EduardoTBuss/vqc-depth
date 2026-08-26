@@ -1,29 +1,25 @@
-"""Splits estratificados 70/15/15 determinísticos + pré-processamento sem vazamento.
+"""Deterministic stratified 70/15/15 splits + leakage-free preprocessing.
 
-O PONTO QUE SUSTENTA O PAPER: para um mesmo (dataset, seed), os 4 modelos
-recebem LITERALMENTE os mesmos índices — inclusive entre processos e sessões
-diferentes. O split depende só de (dataset, seed), NUNCA do modelo.
+For a given (dataset, seed) the four models receive literally the same indices,
+across processes and sessions: the split is a function of (dataset, seed) only,
+never of the model. That is what makes the paired Wilcoxon test legitimate.
+Scaler and imputer are fit on the training split only.
 
-Scaler e imputador são ajustados SOMENTE no treino.
-
-Escolhas de determinismo (o "porquê")
--------------------------------------
-1. A semente de cada sorteio vem de SHA-256 de "vqc-depth|<dataset>|<seed>|<papel>",
-   nunca de hash() do Python (randomizado por processo via PYTHONHASHSEED).
-2. O embaralhamento usa np.random.RandomState (Mersenne Twister), o único gerador
-   do NumPy com garantia de fluxo idêntico entre versões e plataformas —
-   default_rng/PCG64 nao da essa garantia por politica do projeto NumPy.
-3. A estratificação é implementada aqui em vez de delegada ao sklearn: assim o
-   fingerprint SHA-256 do split não depende da versão do sklearn.
-4. Os índices saem EMBARALHADOS (classes intercaladas), não ordenados: se o laço
-   de treino algum dia iterar sem shuffle, ainda assim verá minibatches mistos —
-   banknote e blood vêm agrupados por classe no arquivo original.
+Determinism choices:
+1. Seeds come from SHA-256 of "vqc-depth|<dataset>|<seed>|<role>", never from
+   Python's hash(), which is randomized per process via PYTHONHASHSEED.
+2. Shuffling uses RandomState (Mersenne Twister), the only NumPy generator with
+   a guaranteed identical stream across versions; default_rng/PCG64 has none.
+3. Stratification is implemented here, not delegated to sklearn, so the split
+   fingerprint does not depend on the sklearn version.
+4. Indices come out shuffled: banknote and blood ship grouped by class, so a
+   loop that ever iterated without shuffling would still see mixed minibatches.
 """
 
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 from sklearn.preprocessing import MinMaxScaler
@@ -34,45 +30,37 @@ from .data import load_dataset
 
 @dataclass(frozen=True)
 class Split:
-    """Um split pronto para consumo pelos modelos.
-
-    Os arrays X_* já vêm imputados e escalados para [0, pi] (config.FEATURE_RANGE).
-    Os idx_* são índices na ordem original do dataset carregado por data.load_dataset.
-    """
+    """X_* are imputed and scaled to [0, pi]; idx_* index into the original
+    order returned by data.load_dataset."""
     dataset: str
     seed: int
     idx_train: np.ndarray          # (n_train,) int64
     idx_val: np.ndarray            # (n_val,)   int64
     idx_test: np.ndarray           # (n_test,)  int64
-    X_train: np.ndarray            # (n_train, 4) float64, em [0, pi]
-    y_train: np.ndarray            # (n_train,)   int64 em {0, 1}
+    X_train: np.ndarray            # (n_train, 4) float64, in [0, pi]
+    y_train: np.ndarray            # (n_train,)   int64 in {0, 1}
     X_val: np.ndarray
     y_val: np.ndarray
     X_test: np.ndarray
     y_test: np.ndarray
     feature_names: list[str]
-    hashes: dict[str, str]         # {"train":sha256, "val":..., "test":..., "all":...}
-    n_imputed: dict[str, int]      # imputações aplicadas por partição
+    hashes: dict[str, str]         # {"train": sha256, "val": ..., "test": ..., "all": ...}
+    n_imputed: dict[str, int]      # imputed cells per partition
 
 
 def index_hash(idx: np.ndarray) -> str:
-    """SHA-256 dos índices, estável entre processos e plataformas.
-
-    O dtype é forçado a int64 little-endian ('<i8'): sem isso, o mesmo split
-    hasharia diferente em máquina big-endian ou se o array viesse int32.
-    """
+    """SHA-256 of the indices, stable across processes and platforms. The
+    little-endian int64 cast is what makes it stable: without it the same split
+    hashes differently on a big-endian machine or from an int32 array."""
     arr = np.ascontiguousarray(np.asarray(idx, dtype="<i8"))
     if arr.ndim != 1:
-        raise ValueError(f"index_hash espera vetor 1-D, veio shape {arr.shape}")
+        raise ValueError(f"index_hash expects a 1-D vector, got shape {arr.shape}")
     return hashlib.sha256(arr.tobytes()).hexdigest()
 
 
 def split_hashes(idx_train, idx_val, idx_test) -> dict[str, str]:
-    """Fingerprint das três partições; a chave "all" identifica o split inteiro.
-
-    "all" hasheia a concatenação train+val+test NESSA ordem, de modo que trocar
-    val por test (mesmos índices, outra função) muda o fingerprint.
-    """
+    """Fingerprint of the three partitions. "all" hashes train+val+test in that
+    order, so swapping val for test changes the fingerprint."""
     tr = np.asarray(idx_train, dtype="<i8")
     va = np.asarray(idx_val, dtype="<i8")
     te = np.asarray(idx_test, dtype="<i8")
@@ -85,21 +73,17 @@ def split_hashes(idx_train, idx_val, idx_test) -> dict[str, str]:
 
 
 def _derive_seed(dataset: str, seed: int, role: str) -> int:
-    """Semente de 32 bits reprodutível a partir de (dataset, seed, papel)."""
     key = f"vqc-depth|{dataset}|{int(seed)}|{role}".encode("utf-8")
     return int.from_bytes(hashlib.sha256(key).digest()[:4], "big")
 
 
 def _allocate(n: int, fracs: tuple[float, float, float]) -> tuple[int, int, int]:
-    """Reparte n em 3 partes pelo método do maior resto (determinístico).
-
-    Piso simples jogaria a sobra sempre no teste; o maior resto mantém as
-    proporções o mais perto possível de 70/15/15 dentro de cada classe.
-    """
+    """Split n into 3 parts by largest remainder: plain flooring would always
+    dump the leftover into the test partition."""
     raw = [n * f for f in fracs]
     base = [int(np.floor(r)) for r in raw]
     rest = n - sum(base)
-    # Desempate fixo pela ordem (train, val, test) — sem RNG, sem ambiguidade.
+    # Ties broken by the fixed (train, val, test) order: no RNG, no ambiguity.
     order = sorted(range(3), key=lambda i: (-(raw[i] - base[i]), i))
     for i in order[:rest]:
         base[i] += 1
@@ -109,19 +93,19 @@ def _allocate(n: int, fracs: tuple[float, float, float]) -> tuple[int, int, int]
 def _stratified_indices(
     y: np.ndarray, dataset: str, seed: int
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """70/15/15 estratificado por classe, embaralhado, função de (dataset, seed)."""
+    """70/15/15 stratified per class, shuffled, function of (dataset, seed)."""
     fracs = (config.TRAIN_FRAC, config.VAL_FRAC, config.TEST_FRAC)
-    assert abs(sum(fracs) - 1.0) < 1e-12, f"frações não somam 1: {fracs}"
+    assert abs(sum(fracs) - 1.0) < 1e-12, f"fractions do not sum to 1: {fracs}"
 
     parts: list[list[np.ndarray]] = [[], [], []]
     for cls in np.unique(y):
-        # flatnonzero devolve ordem crescente: ponto de partida canônico.
+        # flatnonzero returns ascending order: a canonical starting point.
         idx_c = np.flatnonzero(y == cls).astype(np.int64)
         rng = np.random.RandomState(_derive_seed(dataset, seed, f"class{int(cls)}"))
         idx_c = idx_c[rng.permutation(idx_c.size)]
         n_tr, n_va, n_te = _allocate(idx_c.size, fracs)
         assert min(n_tr, n_va, n_te) > 0, (
-            f"classe {cls} tem só {idx_c.size} exemplos: partição vazia em 70/15/15"
+            f"class {cls} has only {idx_c.size} samples: empty partition at 70/15/15"
         )
         parts[0].append(idx_c[:n_tr])
         parts[1].append(idx_c[n_tr:n_tr + n_va])
@@ -135,17 +119,17 @@ def _stratified_indices(
 
     idx_train, idx_val, idx_test = out
     total = idx_train.size + idx_val.size + idx_test.size
-    assert total == y.size, f"split perdeu amostras: {total} != {y.size}"
+    assert total == y.size, f"the split lost samples: {total} != {y.size}"
     assert np.array_equal(
         np.sort(np.concatenate(out)), np.arange(y.size, dtype=np.int64)
-    ), "partições se sobrepõem ou não cobrem o dataset"
+    ), "partitions overlap or do not cover the dataset"
     return idx_train, idx_val, idx_test
 
 
 def make_split(dataset: str, seed: int) -> Split:
-    """Split 70/15/15 estratificado determinístico, função APENAS de (dataset, seed)."""
+    """Deterministic stratified 70/15/15 split, a function of (dataset, seed) only."""
     if dataset not in config.DATASETS:
-        raise ValueError(f"dataset desconhecido: {dataset!r}; use um de {config.DATASETS}")
+        raise ValueError(f"unknown dataset: {dataset!r}; use one of {config.DATASETS}")
     seed = int(seed)
 
     X, y, feature_names = load_dataset(dataset)
@@ -153,8 +137,9 @@ def make_split(dataset: str, seed: int) -> Split:
 
     X_tr_raw, X_va_raw, X_te_raw = X[idx_train], X[idx_val], X[idx_test]
 
-    # ── Imputação: mediana do TREINO, aplicada às três partições ─────────
-    # nanmedian ignora o missing; a mediana global vazaria val/test no treino.
+    # -- imputation: TRAINING median applied to all three partitions ------
+    # nanmedian ignores the missing cells; a global median would leak val/test
+    # statistics into training.
     n_imputed = {
         "train": int(np.isnan(X_tr_raw).sum()),
         "val": int(np.isnan(X_va_raw).sum()),
@@ -166,7 +151,7 @@ def make_split(dataset: str, seed: int) -> Split:
         with np.errstate(all="ignore"):
             median = np.nanmedian(X_tr_raw, axis=0)
         assert not np.isnan(median).any(), (
-            f"{dataset}/seed{seed}: coluna inteiramente NaN no treino, sem mediana"
+            f"{dataset}/seed{seed}: fully-NaN column in training, no median"
         )
         X_tr = np.where(np.isnan(X_tr_raw), median, X_tr_raw)
         X_va = np.where(np.isnan(X_va_raw), median, X_va_raw)
@@ -174,17 +159,18 @@ def make_split(dataset: str, seed: int) -> Split:
     else:
         X_tr, X_va, X_te = X_tr_raw.copy(), X_va_raw.copy(), X_te_raw.copy()
 
-    # ── Escala para [0, pi]: fit SÓ no treino ────────────────────────────
-    # MinMax (não StandardScaler): em RY(x), |x| > pi alia estados distintos.
-    # Val/test podem sair de [0, pi] — extrapolação legítima, NÃO se clipa;
-    # clipar seria fingir que o treino viu um extremo que ele não viu.
+    # -- scaling to [0, pi], fit on training only -------------------------
+    # MinMax rather than StandardScaler: under RY(x), |x| > pi aliases distinct
+    # points onto the same state. Val/test may fall outside [0, pi] -- that is
+    # legitimate extrapolation and is NOT clipped; clipping would pretend the
+    # training split had seen an extreme it never saw.
     scaler = MinMaxScaler(feature_range=config.FEATURE_RANGE)
     X_tr = np.ascontiguousarray(scaler.fit_transform(X_tr), dtype=np.float64)
     X_va = np.ascontiguousarray(scaler.transform(X_va), dtype=np.float64)
     X_te = np.ascontiguousarray(scaler.transform(X_te), dtype=np.float64)
 
     for part, arr in (("train", X_tr), ("val", X_va), ("test", X_te)):
-        assert np.isfinite(arr).all(), f"{dataset}/seed{seed}: NaN/inf em X_{part}"
+        assert np.isfinite(arr).all(), f"{dataset}/seed{seed}: NaN/inf in X_{part}"
 
     return Split(
         dataset=dataset,

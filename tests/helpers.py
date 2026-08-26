@@ -17,9 +17,7 @@ from vqcdepth.splits import Split, split_hashes
 PI = config.FEATURE_RANGE[1]
 
 
-# ----------------------------------------------------------------------
-# Synthetic raw dataset (stands in for data.load_dataset)
-# ----------------------------------------------------------------------
+# --- Synthetic raw dataset (stands in for data.load_dataset) ---
 def synthetic_raw(
     n: int = 120,
     seed: int = 0,
@@ -51,9 +49,7 @@ def synthetic_raw(
     return X, y, names
 
 
-# ----------------------------------------------------------------------
-# Synthetic Split (stands in for splits.make_split)
-# ----------------------------------------------------------------------
+# --- Synthetic Split (stands in for splits.make_split) ---
 def synthetic_split(
     dataset: str = "banknote",
     seed: int = 0,
@@ -105,17 +101,15 @@ def poison_test_partition(split: Split, seed: int = 1234) -> Split:
     )
 
 
-# ----------------------------------------------------------------------
-# Reference (golden) pre-processing model -- deliberately naive
-# ----------------------------------------------------------------------
+# --- Reference (golden) pre-processing model -- deliberately naive ---
 def reference_preprocess(
     X_raw_train: np.ndarray, X_raw_other: list[np.ndarray]
 ) -> tuple[np.ndarray, list[np.ndarray], np.ndarray]:
-    """Impute with the TRAIN median, then min-max to [0, pi] with TRAIN bounds.
+    """Impute with the train median, then min-max to [0, pi] with train bounds.
 
     Independent, obviously-correct re-implementation of what
-    ``splits.make_split`` must do -- written without sklearn so a change of
-    sklearn version cannot make both sides wrong in the same way.
+    ``splits.make_split`` must do, written without sklearn so an sklearn
+    version change cannot make both sides wrong in the same way.
     """
     med = np.nanmedian(X_raw_train, axis=0)
     tr = np.where(np.isnan(X_raw_train), med, X_raw_train)

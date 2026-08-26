@@ -1,17 +1,13 @@
 """The three UCI datasets: identity, shape, class balance, missing values.
 
-Why the ``network`` marker
---------------------------
-These tests read ``data/cache/*.npz`` and, if it is missing, would have to
-download from UCI.  This suite is the GATE of the Colab grid: an unreachable
-UCI mirror must never be able to stop 120 runs from starting, so they are
-skipped when the cache is absent (see the ``uci_available`` fixture in
-``conftest.py``).  With the cache present -- the normal case -- they DO run.
+These tests read ``data/cache/*.npz`` and would otherwise have to download from
+UCI.  This suite gates the Colab grid, so an unreachable mirror must not stop
+120 runs from starting: they are skipped when the cache is absent (see the
+``uci_available`` fixture in ``conftest.py``) and run normally when it is
+present.  Everything that needs no real data -- error paths, cache round-trip,
+identity guards -- is in the second half of the file and always runs.
 
-Everything that does not need real data (error paths, cache round-trip,
-identity guards) is in the second half of the file and always runs.
-
-Numbers below were verified on 2026-08-25 against the UCI download.
+The expected counts below are pinned against the UCI download.
 """
 
 from __future__ import annotations
@@ -42,9 +38,7 @@ EXPECTED = {
 }
 
 
-# ======================================================================
-# 1. the real datasets
-# ======================================================================
+# --- 1. The real datasets ---
 @pytest.mark.network
 @pytest.mark.parametrize("name", list(EXPECTED))
 def test_dataset_shape_dtypes_and_feature_names(uci_available, name):
@@ -78,7 +72,7 @@ def test_dataset_class_distribution_is_the_published_one(uci_available, name):
 @pytest.mark.network
 @pytest.mark.parametrize("name", list(EXPECTED))
 def test_missing_values_are_delivered_as_NaN_and_counted_exactly(uci_available, name):
-    """The missing data must SURVIVE the load: imputing here would leak the
+    """The missing data must survive the load: imputing here would leak the
     global median into val/test.  Only ``splits.make_split`` may impute."""
     _, names, _, _, expected_nan = EXPECTED[name]
     X, _, got_names = data.load_dataset(name)
@@ -120,9 +114,7 @@ def test_loading_twice_returns_independent_arrays(uci_available, name):
     assert X2[0, 0] != 12345.0, f"{name}: load_dataset hands out shared state"
 
 
-# ======================================================================
-# 2. error paths and cache handling (no network, always run)
-# ======================================================================
+# --- 2. Error paths and cache handling (no network, always run) ---
 def test_unknown_dataset_is_rejected_by_name():
     with pytest.raises(ValueError):
         data.load_dataset("iris")
@@ -140,13 +132,13 @@ def _write_fake_cache(directory, name, X, y, names):
 
 
 def test_a_cache_with_the_wrong_number_of_rows_is_refused(tmp_path, monkeypatch):
-    """The identity guard: a re-indexed or hand-edited cache must ABORT, not
+    """Identity guard: a re-indexed or hand-edited cache must abort, not
     silently feed the experiment a different dataset."""
     monkeypatch.setattr(data, "CACHE_DIR", tmp_path)
     _write_fake_cache(tmp_path, "banknote",
                       np.zeros((10, 4)), np.array([0, 1] * 5, dtype=np.int64),
                       ["variance", "skewness", "curtosis", "entropy"])
-    with pytest.raises(AssertionError, match="esperava n="):
+    with pytest.raises(AssertionError, match="expected n="):
         data.load_dataset("banknote")
 
 
@@ -176,7 +168,7 @@ def test_a_single_class_target_is_refused(tmp_path, monkeypatch):
     _write_fake_cache(tmp_path, "banknote",
                       np.zeros((1372, 4)), np.zeros(1372, dtype=np.int64),
                       ["variance", "skewness", "curtosis", "entropy"])
-    with pytest.raises(AssertionError, match="binário|binario|nao binario"):
+    with pytest.raises(AssertionError, match="not binary"):
         data.load_dataset("banknote")
 
 

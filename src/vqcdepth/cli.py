@@ -1,14 +1,14 @@
-"""Interface de linha de comando.
+"""Command line interface.
 
     python -m vqcdepth --part train|rebuild|plot|tables|all --outdir DIR
         [--datasets ...] [--models ...] [--seeds ...] [--epochs N] [--no-checkpoint]
 
-A raiz de saida SEMPRE vem de --outdir: nenhum caminho e' fixado no codigo, o
-que e' o que permite escrever direto no Google Drive a partir do Colab.
+The output root always comes from --outdir; no path is hardcoded, which is what
+allows writing straight into Google Drive from Colab.
 
-Particionavel por dataset/modelo/seed para dividir o grid entre runtimes. Como
-cada run e' um arquivo proprio, dois runtimes escrevendo no mesmo Drive nao se
-corrompem.
+The grid can be partitioned by dataset/model/seed to split it across runtimes.
+Since each run is its own file, two runtimes writing to the same Drive folder
+do not corrupt each other.
 """
 
 from __future__ import annotations
@@ -23,42 +23,42 @@ from . import config
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="python -m vqcdepth",
-        description="Estudo de profundidade de VQC (ERAMIA-RS 2026).",
+        description="VQC depth study (ERAMIA-RS 2026).",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument("--part", default="all",
                    choices=["train", "rebuild", "plot", "tables", "all", "status"],
-                   help="etapa a executar")
+                   help="stage to run")
     p.add_argument("--outdir", required=True,
-                   help="raiz de saida (no Colab, uma pasta do Drive)")
+                   help="output root (on Colab, a Drive folder)")
     p.add_argument("--datasets", nargs="+", default=None,
                    choices=list(config.DATASETS), metavar="DS",
-                   help=f"subconjunto de datasets {config.DATASETS}")
+                   help=f"subset of datasets {config.DATASETS}")
     p.add_argument("--models", nargs="+", default=None,
                    choices=list(config.MODELS), metavar="M",
-                   help=f"subconjunto de modelos {config.MODELS}")
+                   help=f"subset of models {config.MODELS}")
     p.add_argument("--seeds", nargs="+", type=int, default=None, metavar="S",
-                   help=f"subconjunto de seeds (padrao: {list(config.SEEDS)})")
+                   help=f"subset of seeds (default: {list(config.SEEDS)})")
     p.add_argument("--epochs", type=int, default=config.N_EPOCHS,
-                   help="epocas COMPLETAS de treino (1 epoca = varredura inteira)")
+                   help="COMPLETE training epochs (1 epoch = full sweep)")
     p.add_argument("--batch-size", type=int, default=config.BATCH_SIZE)
     p.add_argument("--lr", type=float, default=config.LEARNING_RATE)
     p.add_argument("--diff-method", default=config.DIFF_METHOD,
                    choices=["backprop", "parameter-shift"],
-                   help="método de gradiente. NÃO é variável do estudo: o grid "
-                        "do artigo usa backprop, verificado idêntico a "
-                        "parameter-shift a ~1e-16 e ~10x mais barato")
+                   help="gradient method. Not a variable of the study: the "
+                        "paper grid uses backprop, verified identical to "
+                        "parameter-shift to ~1e-16 and ~10x cheaper")
     p.add_argument("--shots", type=int, default=config.SHOTS,
-                   help="amostras por medição (padrão: analítico, sem ruído). "
-                        "Fora do escopo do artigo; exige --diff-method "
-                        "parameter-shift e multiplica o custo")
+                   help="samples per measurement (default: analytic, noiseless). "
+                        "Out of scope for the paper; requires --diff-method "
+                        "parameter-shift and multiplies the cost")
     p.add_argument("--no-checkpoint", action="store_true",
-                   help="nao gravar checkpoints por epoca (o resume e' por RUN, "
-                        "entao isto nao afeta a retomada)")
+                   help="do not write per-epoch checkpoints (resume is per RUN, "
+                        "so this does not affect resuming)")
     p.add_argument("--stop-on-error", action="store_true",
-                   help="abortar no primeiro run que falhar (padrao: seguir)")
+                   help="abort on the first failing run (default: keep going)")
     p.add_argument("--dry-run", action="store_true",
-                   help="listar o que seria executado e sair")
+                   help="list what would be executed and exit")
     return p
 
 
@@ -67,12 +67,12 @@ def _print_status(grid, outdir) -> None:
     todo = runner.pending(grid, outdir)
     done = len(grid) - len(todo)
     print(f"\n  outdir: {Path(outdir).resolve()}")
-    print(f"  grid selecionado: {len(grid)} runs")
-    print(f"  ja concluidos:    {done}")
-    print(f"  faltando:         {len(todo)}")
+    print(f"  grid selected: {len(grid)} runs")
+    print(f"  already done:  {done}")
+    print(f"  missing:       {len(todo)}")
     if todo:
         head = [c.run_id for c in todo[:10]]
-        print("  proximos: " + ", ".join(head) + (" ..." if len(todo) > 10 else ""))
+        print("  next: " + ", ".join(head) + (" ..." if len(todo) > 10 else ""))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -89,10 +89,10 @@ def main(argv: list[str] | None = None) -> int:
         diff_method=args.diff_method, shots=args.shots,
     )
     if args.shots is not None or args.diff_method != config.DIFF_METHOD:
-        print(f"\n  [atenção] configuração FORA do desenho do artigo: "
+        print(f"\n  [warning] configuration OUTSIDE the paper design: "
               f"diff_method={args.diff_method} shots={args.shots}. "
-              f"Os run_id levam sufixo, então estes resultados NÃO "
-              f"sobrescrevem o grid analítico.")
+              f"These run_id values carry a suffix, so the results do NOT "
+              f"overwrite the analytic grid.")
 
     if args.part == "status" or args.dry_run:
         _print_status(grid, outdir)
@@ -114,9 +114,9 @@ def main(argv: list[str] | None = None) -> int:
         try:
             from . import figures
             paths = figures.generate_all(outdir)
-            print(f"\n  {len(paths)} figuras em {Path(outdir) / 'figures'}")
+            print(f"\n  {len(paths)} figures in {Path(outdir) / 'figures'}")
         except ImportError as e:
-            print(f"\n  [aviso] figuras indisponiveis ({e}); instale matplotlib")
+            print(f"\n  [warning] figures unavailable ({e}); install matplotlib")
 
     return 0
 

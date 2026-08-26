@@ -1,152 +1,136 @@
-# Rodando o grid no Google Colab (tudo persistido no Drive)
+# Running the grid on Google Colab (everything persisted to Drive)
 
-Tudo é escrito no Google Drive, sob `MyDrive/ERAMIA-VQC/`:
+Everything is written to Google Drive, under `MyDrive/ERAMIA-VQC/`:
 
 ```
 MyDrive/ERAMIA-VQC/
-├── runs/          UM JSON por execução + o histórico de épocas dela (o checkpoint real)
-├── results/       os CSVs reconstruídos (raw_results, training_history, summary)
-├── predictions/   um parquet por execução: sample_id, y_true, y_pred, y_probability
-├── checkpoints/   pesos a cada 5 épocas + best (artefato do experimento)
-├── figures/       PDF (para o LaTeX) e PNG (para olhar)
-├── tables/        CSV + Markdown + LaTeX
-├── logs/          stdout de cada execução
-└── env.json       versões e hardware da rodada
+├── runs/          one JSON per run plus its epoch history (the real checkpoint)
+├── results/       the rebuilt CSVs
+├── predictions/   one parquet per run: sample_id, y_true, y_pred, y_probability
+├── checkpoints/   weights every 5 epochs plus the best one
+├── figures/       PDF (for LaTeX) and PNG (for looking at)
+├── tables/        CSV, Markdown and LaTeX
+├── logs/          stdout of each execution
+└── env.json       package versions and hardware for the run
 ```
 
-## Como a retomada funciona
+## How resuming works
 
-Cada execução escreve **o seu próprio arquivo**, de forma atômica
-(`tmp` + `os.replace`). Uma execução que já tem arquivo é pulada. Se a sessão
-morrer, reconecte e rode a mesma célula: ela continua exatamente de onde parou,
-perdendo no máximo a execução em voo.
+Each run writes **its own file**, atomically (`tmp` + `os.replace`). A run that
+already has a file is skipped. If the session dies, reconnect and re-run the
+same cell: it continues where it stopped, losing at most the run in flight.
 
-**Nunca existe um CSV compartilhado sendo apendado.** Drive + dois runtimes
-escrevendo no mesmo CSV é receita de corrupção silenciosa. Os CSVs são
-*reconstruídos* a partir dos arquivos por execução, com `--part rebuild`, e o
-rebuild funciona com grid parcial.
+**No shared CSV is ever appended to.** Drive plus two runtimes writing to the
+same CSV is a recipe for silent corruption. The CSVs are *rebuilt* from the
+per-run files with `--part rebuild`, and the rebuild works on a partial grid.
 
-A retomada é **por execução, não por época**. As execuções são curtas o
-bastante para que resume intra-execução seja over-engineering. Os checkpoints
-por época existem como **artefato do experimento** (curvas de convergência,
-observação de norma de gradiente), não como mecanismo de recuperação.
+Resuming is **per run, not per epoch**. Runs are short enough that intra-run
+resume would be over-engineering; the every-5-epochs checkpoints are an
+experimental artefact, not a recovery mechanism.
 
-## Custo
+## Cost
 
-**Medido em piloto local (25/08/2026)**, não estimado:
+Measured locally, not estimated:
 
-| modelo | s/época (n_train=961) | 1 run de 100 épocas | 30 runs |
+| model | s/epoch (n_train=961) | one 100-epoch run | 30 runs |
 |---|---:|---:|---:|
-| `vqc1` | 0,370 | 0,6 min | 13,8 min |
-| `vqc2` | 0,579 | 1,0 min | 21,6 min |
-| `vqc4` | 1,208 | 2,0 min | 45,2 min |
-| `mlp`  | 0,034 | 0,06 min | 1,3 min |
+| `vqc1` | 0.370 | 0.6 min | 13.8 min |
+| `vqc2` | 0.579 | 1.0 min | 21.6 min |
+| `vqc4` | 1.208 | 2.0 min | 45.2 min |
+| `mlp`  | 0.034 | 0.06 min | 1.3 min |
 
-**Grid completo (120 execuções, sequencial): ~82 min** numa máquina local
-razoável. O Colab costuma ser 1,5–2× mais lento, então espere **~2 a 2,7 h**.
-O custo é dominado pelo `vqc4` (55% do total).
+**Full grid (120 runs, sequential): ~82 min** on a reasonable local machine.
+Colab is usually 1.5–2x slower, so expect **~2 to 2.7 h**. `vqc4` dominates,
+at 55% of the total.
 
-`vqc1` e `vqc4` foram medidos por mim no piloto; `vqc2` e `mlp` vêm da
-instrumentação do desenvolvimento e **não foram reconfirmados no piloto** —
-rode a célula 5 com `--models vqc2 mlp` se quiser fechar a conta.
+One epoch here is a **complete sweep of the training set** in minibatches of 16
+— roughly 60 optimiser steps per epoch on Banknote. The pilot in cell 5 measures
+this again on whichever machine Colab hands you.
 
-⚠️ A célula 5 do notebook (piloto) **mede** os segundos por época e extrapola.
-Rode-a antes de qualquer planejamento. Não confie em nenhuma estimativa que não
-tenha saído dessa célula, e em particular **não extrapole do repositório
-`qnn-benchmark`**: lá, "época" era um único passo de minibatch; aqui, época é a
-varredura completa do treino em minibatches de 16. Para o Banknote isso são
-~60 passos por época contra 1 — diferença de ordens de grandeza.
+**Do not request a GPU runtime.** Four qubits on `default.qubit` will not touch
+it; CPU is the right choice.
 
-**Não peça runtime com GPU.** São 4 qubits em `default.qubit`; a GPU não seria
-tocada. Runtime de CPU é a escolha certa.
+## The notebook
 
-## O notebook
+[`notebooks/ERAMIA_launcher.ipynb`](notebooks/ERAMIA_launcher.ipynb) is a **thin
+launcher**: all logic lives in the versioned `vqcdepth` package. The notebook
+only mounts Drive, clones, installs, runs the test gate, measures the pilot and
+fires the grid.
 
-[`notebooks/ERAMIA_launcher.ipynb`](notebooks/ERAMIA_launcher.ipynb) é um
-launcher **fino**: toda a lógica vive no pacote `vqcdepth`, versionado aqui. O
-notebook só monta o Drive, clona, instala, roda o gate de testes, mede o piloto
-e dispara o grid.
-
-Mantenha uma cópia dele no seu Drive e abra por ali (*File → Open notebook →
-Google Drive*). Isso evita ter que autorizar o Colab a acessar o GitHub a cada
-sessão.
+Keep a copy in your own Drive and open it from there (*File → Open notebook →
+Google Drive*), which avoids re-authorising Colab against GitHub every session.
 
 ---
 
-## Célula 1 — Drive
+## Cell 1 — Drive
 
-Monta o Drive e cria a árvore de saída.
+Mounts Drive and creates the output tree.
 
-## Célula 2 — repositório privado, via Colab Secrets
+## Cell 2 — private repository, via Colab Secrets
 
-O repo é **privado**, então o clone precisa de um token.
+The repository is private, so cloning needs a token.
 
-**Antes de rodar**, crie o segredo no Colab (ícone de chave na barra lateral):
+**Before running**, create the secret in Colab (key icon in the sidebar):
 
-- Nome: **`GH_PAT`**
-- Valor: um **fine-grained PAT** do GitHub, **restrito a este repositório**,
-  com **apenas `Contents: Read-only`**. Nada além disso — esse token não
-  precisa poder escrever, nem ver outros repos.
-- Ative *Notebook access* para este notebook.
+- Name: **`GH_PAT`**
+- Value: a **fine-grained PAT**, scoped to this repository only, with
+  **`Contents: Read-only`** and nothing else. The token does not need write
+  access, nor visibility of any other repository.
+- Enable *Notebook access*.
 
-O token **nunca** é digitado numa célula, **nunca** é impresso e **nunca** é
-commitado. A célula ainda faz duas coisas para não vazá-lo:
+The token is never typed into a cell, never printed and never committed. The
+cell also does two things to avoid leaking it: it captures the output of
+`git clone` and **does not print the raw error** (git echoes the URL, which
+contains the token, when authentication fails), and it rewrites the remote right
+after cloning so the token is not left in `.git/config`.
 
-1. captura a saída do `git clone` e **não imprime a mensagem de erro crua** (o
-   git ecoa a URL, que contém o token, quando a autenticação falha);
-2. reescreve o `remote` logo depois do clone, para o token não ficar gravado
-   em `.git/config` dentro da máquina do Colab.
+If the clone fails, the message is deliberately generic: check the PAT, the
+`Contents: Read` scope and the repository name.
 
-Se o clone falhar, a mensagem é genérica de propósito: confira o PAT, o escopo
-`Contents: Read` e o nome do repositório.
+## Cell 3 — dependencies
 
-## Célula 3 — dependências
+`pip install -r requirements.txt` and `pip install -e .`.
 
-`pip install -r requirements.txt` e `pip install -e .`.
-
-## Célula 4 — gate: a suíte de testes
+## Cell 4 — gate: the test suite
 
 ```python
 !VQCDEPTH_ALLOW_DOWNLOAD=1 python -m pytest tests/ -q
 ```
 
-A variável `VQCDEPTH_ALLOW_DOWNLOAD=1` **importa**: sem ela, os 18 testes que
-dependem dos datasets da UCI são *pulados* num clone novo (que não tem cache
-local), e o gate ficaria mais fraco do que parece — justamente a carga dos três
-datasets e os hashes golden dos splits reais. Com a variável, a suíte roda
-completa: **177 testes, ~55 s** (verificado num clone limpo).
+**If this fails, do not run the grid.** This is where it is proven that the
+vectorised circuit returns the same value *and* the same gradient as the
+per-sample loop, that all four models of a `(dataset, seed)` cell receive
+literally the same indices, that the test set never reached the preprocessing,
+and that no angle of the ansatz is inert.
 
-**Se isto falhar, não rode o grid.** É aqui que se prova que a versão
-vetorizada do circuito dá o mesmo valor *e o mesmo gradiente* do laço por
-amostra, que os 4 modelos do mesmo `(dataset, seed)` recebem literalmente os
-mesmos índices, e que o conjunto de teste não vazou para o pré-processamento.
+`VQCDEPTH_ALLOW_DOWNLOAD=1` matters: without it the 18 tests that fetch the UCI
+datasets are *skipped* on a fresh clone, which has no local cache, and the gate
+would be weaker than it looks.
 
-## Célula 5 — piloto (**a célula que mede o tempo**)
+## Cell 5 — pilot, and the cell that measures time
 
-1 dataset × 1 modelo × 2 seeds × 10 épocas.
+One dataset, one model, two seeds, ten epochs. It confirms that files reach
+Drive **and** measures seconds per epoch on this machine. The following cell
+reads the freshly written files and extrapolates, so the number comes from a
+measurement rather than a guess.
 
-Confirma que os arquivos aparecem no Drive **e mede segundos por época**. A
-célula seguinte lê os arquivos recém-gravados e extrapola — o número sai do que
-foi medido, não de um chute.
+Run it with `--models vqc4` as well to capture the worst case: cost grows with
+depth.
 
-Rode também com `--models vqc4` para pegar o pior caso: o custo cresce com a
-profundidade.
+The pilot uses `--epochs 10`, so those runs are **not** paper-grade. The third
+pilot cell deletes them — runs, predictions and checkpoints — before the real
+grid. Left in place, the resume logic would treat them as finished and the final
+grid would contain two cells trained for 10 epochs instead of 100.
 
-O piloto usa `--epochs 10`, então **essas execuções não são grau-de-paper**.
-A terceira célula do piloto as apaga (execuções, predições e checkpoints) antes
-do grid real — se ficarem, o resume as considera prontas e o grid final teria
-duas células treinadas com 10 épocas em vez de 100.
-
-## Célula 6 — grid completo
+## Cell 6 — full grid
 
 ```python
 !python -m vqcdepth --part train --outdir "{DRIVE}" 2>&1 | tee "{LOG}"
 ```
 
-Retomável: pode reexecutar à vontade.
+Resumable: re-run at will.
 
-Para dividir entre dois runtimes (cada execução é um arquivo, então não há
-corrida):
+To split across two runtimes (each run is its own file, so there is no race):
 
 ```python
 # runtime A
@@ -155,10 +139,10 @@ corrida):
 !python -m vqcdepth --part train --outdir "{DRIVE}" --datasets blood mammographic
 ```
 
-Só vale a pena se o piloto mostrar que o grid é longo. O Colab gratuito
-raramente dá dois backends ao mesmo tempo.
+Worth it only if the pilot shows the grid is long. Free Colab rarely grants two
+backends at once.
 
-## Célula 7 — CSVs, tabelas e figuras
+## Cell 7 — CSVs, tables and figures
 
 ```python
 !python -m vqcdepth --part rebuild --outdir "{DRIVE}"
@@ -166,19 +150,19 @@ raramente dá dois backends ao mesmo tempo.
 !python -m vqcdepth --part plot    --outdir "{DRIVE}"
 ```
 
-Funciona com **grid parcial**. Não espere as 120 execuções para começar a
-olhar os dados.
+All three work on a **partial grid**. There is no need to wait for all 120 runs
+before looking at the data.
 
-`tables/wilcoxon_depth.*` é o que responde à RQ1 (vqc1 vs vqc2 vs vqc4);
-`tables/wilcoxon_vs_baseline.*` compara cada modelo com a MLP. Em ambos, a
-coluna que vai para o paper é **`p_holm`**, não `p_value` — `p_holm` corrige as
-múltiplas comparações dentro de cada dataset.
+`tables/wilcoxon_depth.*` is what answers RQ1 (vqc1 vs vqc2 vs vqc4);
+`tables/wilcoxon_vs_baseline.*` compares each model against the MLP. In both,
+the column that belongs in the paper is **`p_holm`**, not `p_value` — `p_holm`
+corrects for the multiple comparisons within each dataset.
 
-## Verificar o andamento a qualquer momento
+## Checking progress at any time
 
 ```python
 !python -m vqcdepth --part status --outdir "{DRIVE}"
 ```
 
-Diz quantas execuções já estão no disco, quantas faltam e quais são as
-próximas. Não treina nada.
+Reports how many runs are on disk, how many are missing and which come next.
+Trains nothing.

@@ -1,12 +1,10 @@
-"""Persistência atômica: UM ARQUIVO POR RUN. Nunca um CSV compartilhado.
+"""Atomic persistence: ONE FILE PER RUN, never a shared CSV.
 
-Por que assim
--------------
-Drive + dois runtimes do Colab escrevendo no mesmo CSV = corrupção silenciosa.
-Cada run escreve o SEU arquivo, de forma atômica (tmp + os.replace). Reabrir a
-sessão = varrer os arquivos existentes e rodar só o que falta. Os CSVs
-agregados são RECONSTRUÍDOS a partir desses arquivos (`--part rebuild`), e o
-rebuild funciona com grid parcial.
+Google Drive plus two Colab runtimes writing the same CSV means silent
+corruption. Each run writes its own file atomically (tmp + os.replace), so
+reopening a session is just a matter of scanning what exists and running what
+is missing. The aggregated CSVs are rebuilt from those files (`--part rebuild`)
+and the rebuild works on a partial grid.
 """
 
 from __future__ import annotations
@@ -20,10 +18,10 @@ from typing import Any, Iterator
 from . import config
 
 
-# ── layout ────────────────────────────────────────────────────────────
+# -- layout -----------------------------------------------------------
 
 def ensure_layout(outdir: str | os.PathLike) -> Path:
-    """Cria a árvore de saída sob --outdir e devolve a raiz."""
+    """Create the output tree under --outdir and return its root."""
     root = Path(outdir)
     for sub in config.SUBDIRS:
         (root / sub).mkdir(parents=True, exist_ok=True)
@@ -46,10 +44,10 @@ def checkpoint_dir(outdir: str | os.PathLike, run_id: str) -> Path:
     return Path(outdir) / "checkpoints" / run_id
 
 
-# ── escrita atômica ───────────────────────────────────────────────────
+# -- atomic writes ----------------------------------------------------
 
 def atomic_write_bytes(path: str | os.PathLike, payload: bytes) -> Path:
-    """Escreve tmp no MESMO diretório e faz os.replace (atômico no mesmo FS)."""
+    """Write to a tmp file in the SAME directory, then os.replace it."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".tmp_", suffix=path.suffix)
@@ -60,9 +58,8 @@ def atomic_write_bytes(path: str | os.PathLike, payload: bytes) -> Path:
             os.fsync(f.fileno())
         os.replace(tmp, path)
     except BaseException:
-        # não deixa lixo se algo explodiu no meio
         try:
-            os.unlink(tmp)
+            os.unlink(tmp)      # never leave a stray tmp file behind
         except OSError:
             pass
         raise
@@ -85,17 +82,18 @@ def _jsonable(o):
         return float(o)
     if isinstance(o, np.ndarray):
         return o.tolist()
-    raise TypeError(f"não serializável: {type(o)}")
+    raise TypeError(f"not serializable: {type(o)}")
 
 
-# ── leitura / varredura ───────────────────────────────────────────────
+# -- reading / scanning -----------------------------------------------
 
 def run_exists(outdir, run_id: str) -> bool:
-    """Um run só conta como feito se o JSON existe E está íntegro E completed.
+    """A run only counts as done if its JSON exists, parses and is completed.
 
-    JSON truncado (sessão do Colab morta no meio da escrita) é tratado como
-    ausente, para ser refeito — é justamente o caso que a escrita atômica
-    deveria impedir, mas a leitura defensiva custa nada.
+    A truncated JSON (Colab session killed mid-write) is treated as absent so
+    that it gets redone. Valid JSON that is not an object ('[]', 'null', '3')
+    would pass json.load and then blow up on .get, taking down the whole scan
+    because of a single file.
     """
     p = run_path(outdir, run_id)
     if not p.exists():
@@ -105,9 +103,6 @@ def run_exists(outdir, run_id: str) -> bool:
             rec = json.load(f)
     except (json.JSONDecodeError, OSError):
         return False
-    # JSON valido mas que nao e' um objeto ('[]', 'null', '3') passaria pelo
-    # guarda acima e explodiria no .get - derrubando a varredura INTEIRA por
-    # causa de um arquivo. Trata-se como ausente, para ser refeito.
     if not isinstance(rec, dict):
         return False
     return rec.get("status") == "completed"
@@ -119,7 +114,7 @@ def load_run(outdir, run_id: str) -> dict:
 
 
 def iter_runs(outdir) -> Iterator[dict]:
-    """Varre todos os runs gravados, ignorando os corrompidos (com aviso)."""
+    """Scan every stored run, skipping the damaged ones with a warning."""
     d = Path(outdir) / "runs"
     if not d.exists():
         return
@@ -128,16 +123,16 @@ def iter_runs(outdir) -> Iterator[dict]:
             with open(p, encoding="utf-8") as f:
                 rec = json.load(f)
         except (json.JSONDecodeError, OSError) as e:
-            print(f"  [aviso] run ilegível, ignorado: {p.name} ({e})")
+            print(f"  [warning] unreadable run, skipped: {p.name} ({e})")
             continue
         if not isinstance(rec, dict):
-            print(f"  [aviso] run não é objeto JSON, ignorado: {p.name}")
+            print(f"  [warning] run is not a JSON object, skipped: {p.name}")
             continue
         yield rec
 
 
 def write_env_json(outdir) -> dict:
-    """Versões e hardware da rodada — é isto que vai para a seção de repro."""
+    """Versions and hardware of the session: the input to the repro section."""
     import importlib.metadata as md
     import platform
     import sys
@@ -158,8 +153,8 @@ def write_env_json(outdir) -> dict:
         "processor": platform.processor(),
         "cpu_count": os.cpu_count(),
         "packages": pkgs,
-        "device": "default.qubit (statevector analítico, sem shot noise)",
-        "epoch_semantics": "1 época = varredura COMPLETA do treino em minibatches",
+        "device": "default.qubit (analytic statevector, no shot noise)",
+        "epoch_semantics": "1 epoch = COMPLETE sweep over the training set in minibatches",
         "hyperparams": {
             "n_qubits": config.N_QUBITS,
             "vqc_layers": config.VQC_LAYERS,

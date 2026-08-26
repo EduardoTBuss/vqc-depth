@@ -1,76 +1,29 @@
-"""Variational quantum classifier used in the ERAMIA-RS 2026 depth study.
+"""Variational quantum classifier for the circuit-depth study.
 
-The ONLY thing that changes between vqc1 / vqc2 / vqc4 is ``n_layers``:
-same encoding, same layer template, same observable, same weight layout.
+Only ``n_layers`` differs between vqc1 / vqc2 / vqc4: same angle encoding
+(applied once, no data re-uploading), same layer template, same observable,
+same weight layout ``(n_layers, N_QUBITS, 2)`` with ``[..., 0]`` the RZ angle
+and ``[..., 1]`` the RY angle.  Feature ``j`` rides wire ``j``, readout is
+``<Z_0>``, and ``p(y=1) = (1 + <Z_0>) / 2``.  Statevector labels are big-endian
+in the wire index here, the opposite of Qiskit.
 
-Qubit ordering / conventions (read before touching anything)
-------------------------------------------------------------
-* PennyLane wires are ``0..N_QUBITS-1``; feature ``j`` of the sample is encoded
-  on wire ``j`` (``RY(x_j)`` on wire ``j``).  4 features -> 4 qubits, 1:1.
-* PennyLane's statevector ordering is BIG-ENDIAN in the wire index (wire 0 is
-  the MOST significant bit of the computational-basis label).  This is the
-  opposite of Qiskit's little-endian convention; if any number here is ever
-  compared against a Qiskit table, wire order must be reversed there.
-* The readout is ``<Z>`` on wire 0 -- i.e. the FIRST feature's qubit.  The chain
-  of CNOTs is what lets information from wires 1..3 reach wire 0, so a circuit
-  with 0 entangling blocks would be blind to features 1..3 by construction.
-* p(y=1) = (1 + <Z_0>) / 2, so <Z_0> = +1 -> p = 1 and <Z_0> = -1 -> p = 0.
+The layer layout -- RZ then RY, then a CNOT chain 3->2->1->0 -- keeps every
+angle effective.  Pulling ``Z_0`` back through the entangling block always
+yields a diagonal operator, so the rotation sitting last must not commute with
+Z: an RZ there would be dead, hence RZ first and RY last.  The chain runs
+toward the readout wire because a CNOT ring (``j -> (j+1) % 4``) pulls back to
+``Z_1 Z_2 Z_3``, the identity on wire 0, which kills every last-layer rotation
+on the only wire measured; the chain pulls back to ``Z_0 Z_1 Z_2 Z_3``.
+Perturbing each angle and counting those that move the output gives
+effective/nominal = 8/8, 16/16, 32/32 at L = 1, 2, 4, so the 1:2:4 parameter
+progression is honest; two rotations per qubit also keep the state off the
+real-amplitude subspace an RY-only ansatz is confined to.
+``tests/test_ansatz.py`` pins these counts.
 
-Circuit (n_layers = L)
-----------------------
-    RY(x_0) w0 ; RY(x_1) w1 ; RY(x_2) w2 ; RY(x_3) w3      <- encoding, ONCE
-    repeat L times:
-        for j in 0..3:  RZ(theta[l,j,0]) w_j ; RY(theta[l,j,1]) w_j
-        CNOT(w3->w2) ; CNOT(w2->w1) ; CNOT(w1->w0)          <- chain TOWARD w0
-    measure <Z_0>
-
-There is NO data re-uploading: the encoding block appears exactly once, before
-the first variational layer.  (``vqc_c`` in the qnn-benchmark repo DOES
-re-upload; that is a different circuit and was not ported.)
-
-Weight tensor shape: ``(n_layers, N_QUBITS, 2)`` -> 8 params per layer.
-    index [..., 0] -> RZ angle,  index [..., 1] -> RY angle.
-
-WHY THIS EXACT ORDER AND THIS EXACT CHAIN DIRECTION (measured, 2026-08-25)
---------------------------------------------------------------------------
-Both choices exist to make EVERY angle count.  Pulling the readout back
-(Heisenberg) through the final entangling block decides which angles are dead:
-
-* With a CNOT **ring** (``j -> (j+1) % 4``) the pullback is
-  ``U_ring^dag Z_0 U_ring = Z_1 Z_2 Z_3``: it acts as the IDENTITY on wire 0,
-  so every last-layer rotation on wire 0 becomes invisible.
-* With the CNOT **chain toward the readout** (3->2->1->0) the pullback is
-  ``Z_0 Z_1 Z_2 Z_3``, which acts non-trivially on ALL four wires.
-* The pullback is always DIAGONAL (a product of Z's), so whatever rotation sits
-  LAST before the entangler must not commute with Z.  ``RZ`` does commute, so
-  ``RZ`` must come FIRST and ``RY`` last inside the layer.
-
-Measured effective angle counts (perturb each angle by 0.9 rad, count those
-that move the output by more than 1e-12):
-
-    ansatz                          L=1     L=2     L=4
-    RY,RZ + ring   (first draft)    3/8    11/16   27/32
-    RZ,RY + ring                    6/8    14/16   30/32
-    RY only + chain 3->2->1->0      4/4     8/8    16/16
-    RZ,RY + chain 3->2->1->0  <--   8/8    16/16   32/32   THIS ONE
-
-The chosen ansatz is the only measured variant where nominal == effective at
-every depth, so ``config.n_parameters`` (8 / 16 / 32) is honest and the
-progression is exactly 1:2:4.  It also keeps two rotations per qubit, so the
-state is NOT restricted to real amplitudes (an ``RY``-only ansatz would be).
-
-``tests/test_ansatz.py`` pins these numbers: if the layer template or the chain
-direction is ever changed, it fails on purpose and forces a conscious decision
-instead of silently changing every number in the study.
-
-Simulation
-----------
-``default.qubit``, analytic statevector (shots=None), float64, CPU.  4 qubits =
-16 amplitudes, so cost is dominated by Python/autograd overhead, not by the
-linear algebra.  ``diff_method="backprop"`` is pinned explicitly: on an ideal
-simulator it returns the same exact gradient as parameter-shift (verified in
-``_scratch_check_train.py``) at a fraction of the cost.  Switch to
-"parameter-shift" only if the study ever moves to shot noise / hardware.
+Simulation is analytic ``default.qubit`` in float64 (4 qubits, 16 amplitudes).
+``diff_method="backprop"`` is pinned because on an ideal simulator it returns
+the same gradient as parameter-shift at a fraction of the cost; parameter-shift
+is only needed under shot noise or on hardware.
 """
 
 from __future__ import annotations
@@ -97,19 +50,13 @@ def weights_shape(n_layers: int) -> tuple[int, int, int]:
 
 
 def n_parameters(n_layers: int) -> int:
-    """Number of trainable angles = n_layers * N_QUBITS * 2."""
     return int(np.prod(weights_shape(n_layers)))
 
 
 def make_qnode(n_layers: int, device: object | None = None,
                diff_method: str | None = None, shots: int | None = None):
-    """Build the QNode for a circuit with ``n_layers`` variational layers.
-
-    The returned callable has signature ``circuit(inputs, weights)`` where
-    ``inputs`` is either ``(N_QUBITS,)`` (one sample) or ``(batch, N_QUBITS)``
-    (parameter broadcasting -- the whole minibatch in ONE device call) and
-    ``weights`` has shape ``weights_shape(n_layers)``.
-    """
+    """QNode ``circuit(inputs, weights)``; ``inputs`` may be ``(N_QUBITS,)``
+    or ``(batch, N_QUBITS)`` (broadcast: one device call per minibatch)."""
     if int(n_layers) < 1:
         raise ValueError(f"n_layers must be >= 1, got {n_layers}")
     n_layers = int(n_layers)
@@ -125,40 +72,35 @@ def make_qnode(n_layers: int, device: object | None = None,
 
     @qml.qnode(dev, interface="autograd", diff_method=diff_method)
     def circuit(inputs, weights):
-        # --- encoding: angle encoding, applied exactly once -------------
-        # inputs[..., j] keeps the leading broadcast axis (if any) intact.
+        # inputs[..., j] preserves the leading broadcast axis, if any.
         for j in range(config.N_QUBITS):
             qml.RY(inputs[..., j], wires=j)
-        # --- variational layers -----------------------------------------
         for layer in range(n_layers):
             for j in range(config.N_QUBITS):
                 qml.RZ(weights[layer, j, 0], wires=j)
                 qml.RY(weights[layer, j, 1], wires=j)
-            # CNOT chain running TOWARD the readout wire (3->2->1->0).  The
-            # direction is not cosmetic: see the note at the top of the module.
+            # Chain toward the readout wire; direction is load-bearing, see the
+            # module docstring.
             for j in range(config.N_QUBITS - 1, 0, -1):
                 qml.CNOT(wires=[j, j - 1])
         return qml.expval(qml.PauliZ(0))
 
-    # qml.set_shots is the supported way since PL 0.44; passing shots= to the
-    # device is deprecated and warns.  shots=None keeps the analytic path.
+    # qml.set_shots is the supported route since PL 0.44; shots= on the device
+    # is deprecated.  shots=None keeps the analytic path.
     if shots is not None:
         circuit = qml.set_shots(circuit, shots=int(shots))
 
     circuit.n_layers = n_layers
-    # NB: 'shots' and 'diff_method' are reserved attributes on a QNode -- the
-    # underscore names are ours, for introspection in tests and logs.
+    # 'shots' and 'diff_method' are reserved on a QNode, hence the private names.
     circuit._vqcdepth_diff_method = diff_method
     circuit._vqcdepth_shots = shots
     return circuit
 
 
 def init_weights(n_layers: int, rng: np.random.Generator) -> pnp.ndarray:
-    """Uniform init in [-pi, pi] from an EXPLICIT Generator.
-
-    Never touches the global NumPy RNG: reproducibility across processes must
-    not depend on interpreter-wide state.
-    """
+    """Uniform init in [-pi, pi] from an explicit Generator; the global NumPy
+    RNG is never touched, so reproducibility does not depend on
+    interpreter-wide state."""
     if not isinstance(rng, np.random.Generator):
         raise TypeError("rng must be a numpy.random.Generator (explicit stream)")
     w = rng.uniform(-np.pi, np.pi, size=weights_shape(n_layers))
@@ -166,14 +108,11 @@ def init_weights(n_layers: int, rng: np.random.Generator) -> pnp.ndarray:
 
 
 def eval_batch(circuit, weights, X):
-    """Evaluate <Z_0> for the WHOLE batch in a single device call.
+    """Evaluate <Z_0> for the whole batch, shape ``(len(X),)``.
 
-    Uses PennyLane parameter broadcasting: identical value AND identical
-    gradient as ``[circuit(x, weights) for x in X]`` (checked to ~1e-12 in
-    ``_scratch_check_train.py``), but one device execution instead of ``len(X)``.
-    This is where the speedup of the whole grid comes from.
-
-    Returns an array of shape ``(len(X),)`` -- also for a single-row X.
+    Parameter broadcasting gives the same value and gradient as
+    ``[circuit(x, weights) for x in X]`` (agreement ~1e-12) in one device
+    execution instead of ``len(X)``.
     """
     Xb = pnp.array(np.atleast_2d(X), requires_grad=False)
     out = circuit(Xb, weights)

@@ -5,11 +5,19 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "vqcdepth"
 version = "0.1.0"
-description = "Estudo empirico controlado da profundidade de VQCs vs. MLP classica (ERAMIA-RS 2026)"
+description = "Controlled empirical study of circuit depth in variational quantum classifiers"
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "Eduardo Timm Buss", email = "eduardotimmbus@gmail.com" }]
 license = { text = "MIT" }
+keywords = ["quantum-machine-learning", "variational-quantum-classifier",
+            "pennylane", "quantum-computing", "reproducible-research"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 
 [project.scripts]
 vqcdepth = "vqcdepth.cli:main"

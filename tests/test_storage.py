@@ -1,9 +1,9 @@
 """Persistence: atomic writes and defensive reads.
 
 The grid runs on Colab, writing to Google Drive, with a runtime that can be
-killed at any moment.  The contract is: a run counts as done only when its JSON
-exists, parses, and says ``completed``.  Anything else must look ABSENT so that
-the run is redone -- and must never take down the scan of the other 119 runs.
+killed at any moment.  A run counts as done only when its JSON exists, parses
+and says ``completed``; anything else must look absent so the run is redone,
+and must never take down the scan of the other 119 runs.
 """
 
 from __future__ import annotations
@@ -28,9 +28,7 @@ def _write_run(outdir: Path, run_id: str, status: str = "completed") -> Path:
                                      _record(run_id, status))
 
 
-# ======================================================================
-# 1. layout
-# ======================================================================
+# --- 1. Layout ---
 def test_ensure_layout_creates_every_subdirectory_and_is_idempotent(tmp_path):
     root = storage.ensure_layout(tmp_path / "out")
     for sub in config.SUBDIRS:
@@ -49,9 +47,7 @@ def test_path_helpers_agree_with_the_run_id_convention(tmp_path):
     assert storage.checkpoint_dir(tmp_path, cfg.run_id).name == cfg.run_id
 
 
-# ======================================================================
-# 2. atomic writes
-# ======================================================================
+# --- 2. Atomic writes ---
 def test_atomic_write_leaves_no_temporary_file_behind(tmp_path):
     p = storage.atomic_write_text(tmp_path / "deep" / "a.txt", "hello")
     assert p.read_text(encoding="utf-8") == "hello"
@@ -95,14 +91,12 @@ def test_unicode_survives_the_round_trip(tmp_path):
     text = "acentuação — ✓ ünïcödé 中文"
     path = storage.atomic_write_text(tmp_path / "u.txt", text)
     assert path.read_text(encoding="utf-8") == text
-    rec = {"nota": text}
+    rec = {"note": text}
     p2 = storage.atomic_write_json(tmp_path / "u.json", rec)
     assert json.loads(p2.read_text(encoding="utf-8")) == rec
 
 
-# ======================================================================
-# 3. run_exists: only a COMPLETE, PARSEABLE, completed run counts
-# ======================================================================
+# --- 3. run_exists: only a complete, parseable, completed run counts ---
 def test_run_exists_is_false_when_there_is_no_file(outdir):
     assert storage.run_exists(outdir, "banknote__vqc1__seed00") is False
 
@@ -132,8 +126,8 @@ def test_a_damaged_run_json_counts_as_absent(outdir, payload):
     )
 
 
-# REGRESSAO: defeito encontrado em 2026-08-25 (JSON valido mas nao-objeto em runs/) e CORRIGIDO
-# no mesmo dia. Este teste fica para impedir que volte.
+# Regression guard: a JSON file in runs/ that parses but is not an object was
+# once accepted as a completed run.
 @pytest.mark.parametrize("payload", ["[]", "null", '"x"', "3"])
 def test_a_run_json_that_parses_to_a_non_dict_counts_as_absent(outdir, payload):
     path = storage.run_path(outdir, "weird")
@@ -148,9 +142,7 @@ def test_load_run_round_trips_the_record(outdir):
     assert rec["run_id"] == "banknote__vqc1__seed00" and rec["status"] == "completed"
 
 
-# ======================================================================
-# 4. iter_runs never dies on a bad file
-# ======================================================================
+# --- 4. iter_runs never dies on a bad file ---
 def test_iter_runs_skips_damaged_files_and_yields_the_healthy_ones(outdir, capsys):
     for rid in ("a", "b", "c"):
         _write_run(outdir, rid)
@@ -160,7 +152,7 @@ def test_iter_runs_skips_damaged_files_and_yields_the_healthy_ones(outdir, capsy
     assert got == ["a", "b", "c"], (
         f"one corrupted file changed the scan of the healthy ones: {got}"
     )
-    assert "aviso" in capsys.readouterr().out, "the skip must be reported, not silent"
+    assert "warning" in capsys.readouterr().out, "the skip must be reported, not silent"
 
 
 def test_iter_runs_on_a_missing_directory_is_empty_not_an_error(tmp_path):
@@ -173,9 +165,7 @@ def test_iter_runs_ignores_the_history_csv_files(outdir):
     assert [r["run_id"] for r in storage.iter_runs(outdir)] == ["a"]
 
 
-# ======================================================================
-# 5. environment manifest
-# ======================================================================
+# --- 5. Environment manifest ---
 def test_env_json_records_versions_and_the_frozen_hyperparameters(outdir):
     env = storage.write_env_json(outdir)
     path = Path(outdir) / "env.json"

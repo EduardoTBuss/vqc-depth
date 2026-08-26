@@ -1,23 +1,15 @@
-"""Classical MLP baseline (PyTorch), 4 -> 8 -> 4 -> 1.
+"""Classical MLP baseline (PyTorch), 4 -> 8 -> 4 -> 1, 81 parameters.
 
-This baseline is NOT the object of study -- the independent variable of the
-experiment is the DEPTH of the VQC.  The MLP exists only as a classical
-reference point of comparable (small) capacity, and it is deliberately left
-untuned: no scheduler, no dropout, no batch-norm, no early stopping.  It gets
-exactly the same loss (BCE), optimizer (Adam), learning rate, batch size and
-number of epochs as the VQCs, and the same split.  The paper must state this
-explicitly.
+The baseline is not the object of study -- circuit depth is -- so the MLP is
+deliberately left untuned (no scheduler, dropout, batch-norm or early stopping)
+and gets exactly the same loss, optimizer, learning rate, batch size, epoch
+budget and split as the VQCs.
 
-Parameter count: 4*8+8 + 8*4+4 + 4*1+1 = 40 + 36 + 5 = 81
-(checked against ``config.n_parameters("mlp")``).
-
-Reproducibility
----------------
-Every weight is drawn from an EXPLICIT ``torch.Generator``; the global torch
-RNG is never seeded and never consulted.  The initialisation formula is the
-same one ``nn.Linear.reset_parameters`` uses (kaiming_uniform with a=sqrt(5),
-which collapses to U(-1/sqrt(fan_in), +1/sqrt(fan_in)) for both weight and
-bias) -- reimplemented here only so that it can be driven by our generator.
+Every weight is drawn from an explicit ``torch.Generator``; the global torch
+RNG is never seeded nor consulted.  The initialisation formula is the one
+``nn.Linear.reset_parameters`` uses (kaiming_uniform with a=sqrt(5), which
+collapses to U(-1/sqrt(fan_in), +1/sqrt(fan_in)) for weight and bias alike),
+reimplemented here only so it can be driven by that generator.
 """
 
 from __future__ import annotations
@@ -72,8 +64,8 @@ def init_parameters(model: MLP, generator: torch.Generator) -> MLP:
 def build_mlp(generator: torch.Generator, dtype: torch.dtype = torch.float64) -> MLP:
     """Build the baseline with explicitly seeded weights.
 
-    float64 by default so that the classical and quantum branches carry the
-    same numerical precision (the statevector simulator is float64).
+    float64 by default so both branches carry the same precision as the
+    statevector simulator.
     """
     model = MLP().to(dtype=dtype)
     init_parameters(model, generator)
@@ -98,7 +90,7 @@ def predict_proba(model: MLP, X) -> np.ndarray:
 
 
 def clone_mlp(model: MLP) -> MLP:
-    """Detached deep copy -- used to snapshot the best epoch (81 params)."""
+    """Detached deep copy, used to snapshot the best epoch."""
     clone = copy.deepcopy(model)
     for p in clone.parameters():
         p.requires_grad_(False)

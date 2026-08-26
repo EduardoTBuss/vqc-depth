@@ -1,12 +1,10 @@
 """Circuit contract: batched evaluation, gradients, parameter counts.
 
-What this file protects
------------------------
 The whole grid runs on ``circuits.eval_batch`` (PennyLane parameter
 broadcasting).  If broadcasting ever stopped agreeing with the naive
-"one circuit call per sample" form -- in VALUE or in GRADIENT -- every number
-in the paper would be wrong and nothing else would complain.  So the naive
-loop is kept here, forever, as the reference model.
+one-circuit-call-per-sample form, in value or in gradient, every number in the
+paper would be wrong and nothing else would complain, so the naive loop is kept
+here as the reference model.
 """
 
 from __future__ import annotations
@@ -19,7 +17,7 @@ from pennylane import numpy as pnp
 from vqcdepth import circuits, config, models, train
 
 LAYERS = (1, 2, 4)
-SEED = 20260825
+SEED = 1234
 
 # Batch/gradient agreement is measured at ~1e-16 (float64 round-off).  1e-10 is
 # six orders of magnitude of slack: tight enough to catch a real divergence,
@@ -47,9 +45,7 @@ def batch():
     return X, y
 
 
-# ======================================================================
-# 1. vectorisation == loop, in value AND in gradient
-# ======================================================================
+# --- 1. Vectorisation == loop, in value and in gradient ---
 @pytest.mark.parametrize("n_layers", LAYERS)
 def test_eval_batch_value_equals_per_sample_loop(batch, n_layers):
     X, _ = batch
@@ -61,9 +57,9 @@ def test_eval_batch_value_equals_per_sample_loop(batch, n_layers):
 
     err = float(np.max(np.abs(v_batch - v_loop)))
     assert err < TOL, (
-        f"L={n_layers}: broadcasting disagrees with the per-sample loop in VALUE "
+        f"L={n_layers}: broadcasting disagrees with the per-sample loop in value "
         f"by {err:.3e} (> {TOL:.0e}). Every expectation value of the grid comes "
-        f"from the broadcast path -- do not run the grid until this is explained."
+        f"from the broadcast path; do not run the grid until this is explained."
     )
 
 
@@ -88,19 +84,14 @@ def test_eval_batch_gradient_equals_per_sample_loop(batch, n_layers):
     assert d_loss < TOL, f"L={n_layers}: batched loss differs by {d_loss:.3e}"
     assert d_grad < TOL, (
         f"L={n_layers}: broadcasting disagrees with the per-sample loop in "
-        f"GRADIENT by {d_grad:.3e} (> {TOL:.0e}); |g|max={np.max(np.abs(g_loop)):.3e}. "
+        f"gradient by {d_grad:.3e} (> {TOL:.0e}); |g|max={np.max(np.abs(g_loop)):.3e}. "
         f"Training would silently follow the wrong direction."
     )
 
 
 @pytest.mark.parametrize("n_layers", LAYERS)
 def test_backprop_gradient_matches_central_finite_differences(n_layers):
-    """Gradient check: analytic backprop vs (f(x+h) - f(x-h)) / 2h.
-
-    Only the ACTIVE angles are scored: the inert ones (see ``test_ansatz.py``)
-    have an exactly zero analytic gradient, so their relative error would be
-    0/0 noise.
-    """
+    """Gradient check: analytic backprop vs (f(x+h) - f(x-h)) / 2h."""
     rng = np.random.default_rng(SEED)
     X = rng.uniform(0.0, np.pi, (8, config.N_QUBITS))
     y = pnp.array(rng.integers(0, 2, 8).astype(float), requires_grad=False)
@@ -122,12 +113,12 @@ def test_backprop_gradient_matches_central_finite_differences(n_layers):
         g_num[ix] = (float(cost(pnp.array(wp, requires_grad=True)))
                      - float(cost(pnp.array(wm, requires_grad=True)))) / (2 * eps)
 
-    # MIXED tolerance, not purely relative.  Central differences with eps=1e-6
+    # Mixed tolerance, not purely relative: central differences with eps=1e-6
     # carry an absolute error floor of ~1e-10 in float64, so dividing by a
-    # genuinely small gradient blows the relative error up while the gradient
-    # is perfectly correct.  Since the ansatz was fixed (2026-08-25) EVERY
-    # angle is live, and some are legitimately small -- hence atol.
-    # Measured worst case over L=1,2,4: 1.2e-10 absolute, ~100x inside atol.
+    # legitimately small gradient inflates the relative error even though the
+    # gradient is correct.  Every angle of this ansatz is live and some are
+    # small, hence the atol.  Worst case over L=1,2,4 is 1.2e-10 absolute,
+    # about 100x inside atol.
     atol, rtol = 1e-8, 1e-6
     err = np.abs(g_ana - g_num)
     bound = atol + rtol * np.abs(g_ana)
@@ -165,18 +156,14 @@ def test_backprop_gradient_matches_parameter_shift(n_layers):
     )
 
 
-# ======================================================================
-# 2. analytic anchor
-# ======================================================================
+# --- 2. Analytic anchor ---
 def test_zero_weights_one_layer_matches_closed_form():
     """With all angles zero and L=1, <Z_0> = prod_j cos(x_j), exactly.
 
-    Derivation: the CNOT chain 3->2->1->0 maps Z_0 -> Z_0 Z_1 Z_2 Z_3
-    (Heisenberg), the encoded state is a product state, and <Z_j> = cos(x_j)
-    for RY(x_j)|0>.  ALL FOUR features appear -- including x_0.  (With a CNOT
-    ring the pullback would be Z_1 Z_2 Z_3 and the readout qubit's own feature
-    would be invisible at depth 1; that is one more reason the chain was
-    chosen.)  Anchors wire order, rotation sense and chain direction at once.
+    The chain 3->2->1->0 maps Z_0 -> Z_0 Z_1 Z_2 Z_3, the encoded state is a
+    product state, and <Z_j> = cos(x_j) for RY(x_j)|0>, so all four features
+    appear, x_0 included.  Anchors wire order, rotation sense and chain
+    direction at once.
     """
     circuit = circuits.make_qnode(1)
     w = pnp.array(np.zeros(circuits.weights_shape(1)), requires_grad=True)
@@ -200,9 +187,7 @@ def test_predict_proba_is_affine_image_of_expectation_and_in_unit_interval():
     assert np.all((p >= 0.0) & (p <= 1.0)), f"p out of [0,1]: {p.min()}, {p.max()}"
 
 
-# ======================================================================
-# 3. edge cases of the batching helper
-# ======================================================================
+# --- 3. Edge cases of the batching helper ---
 def test_eval_batch_accepts_a_single_sample_and_still_returns_1d():
     circuit = circuits.make_qnode(1)
     w = circuits.init_weights(1, np.random.default_rng(3))
@@ -259,9 +244,7 @@ def test_init_weights_never_consumes_the_global_numpy_stream():
     assert before == after, "init_weights consumed the global legacy RNG"
 
 
-# ======================================================================
-# 4. parameter counts (nominal)
-# ======================================================================
+# --- 4. Parameter counts (nominal) ---
 @pytest.mark.parametrize("model,n_layers,expected", [("vqc1", 1, 8),
                                                      ("vqc2", 2, 16),
                                                      ("vqc4", 4, 32)])

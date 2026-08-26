@@ -1,9 +1,9 @@
 """Aggregation, rebuild-from-disk and the multiple-comparison correction.
 
 ``holm`` decides which claims of the paper get a star, so it is checked against
-hand-computed values, not against another implementation of itself.  ``rebuild``
-has to work on a PARTIAL grid, because the researcher looks at 20 of 120 runs
-long before the grid ends.
+hand-computed values rather than another implementation of itself.  ``rebuild``
+has to work on a partial grid, because the results are inspected at 20 of 120
+runs, long before the grid ends.
 """
 
 from __future__ import annotations
@@ -15,9 +15,7 @@ import pytest
 from vqcdepth import config, storage, tables
 
 
-# ======================================================================
-# 1. Holm-Bonferroni
-# ======================================================================
+# --- 1. Holm-Bonferroni ---
 def test_holm_matches_a_hand_computed_family():
     """p = [0.01, 0.04, 0.03, 0.005], m = 4.
 
@@ -93,9 +91,7 @@ def test_holm_handles_p_equal_to_zero():
     np.testing.assert_allclose(got, [0.0, 0.5], rtol=0, atol=1e-15)
 
 
-# ======================================================================
-# 2. rebuild from disk, including a PARTIAL grid
-# ======================================================================
+# --- 2. Rebuild from disk, including a partial grid ---
 def _fake_record(dataset: str, model: str, seed: int, f1: float) -> dict:
     return {
         "run_id": f"{dataset}__{model}__seed{seed:02d}",
@@ -177,8 +173,8 @@ def test_rebuild_on_a_partial_grid_reports_exactly_what_is_missing(outdir, capsy
     assert len(out["raw"]) == 3
     total = len(config.DATASETS) * len(config.MODELS) * len(config.SEEDS)
     assert total == 120
-    assert f"runs lidos: 3/{total}" in printed
-    assert f"faltam {total - 3} runs" in printed
+    assert f"runs read: 3/{total}" in printed
+    assert f"{total - 3} runs missing" in printed
     assert len(tables._missing(out["raw"])) == total - 3
     assert "banknote__vqc1__seed00" not in tables._missing(out["raw"])
     assert (outdir / "results" / "raw_results.csv").exists()
@@ -197,7 +193,7 @@ def test_rebuild_ignores_incomplete_and_damaged_runs(outdir, capsys):
     assert list(raw["run_id"]) == ["banknote__vqc1__seed00"], (
         "a failed or corrupted run entered the aggregated results"
     )
-    assert "aviso" in capsys.readouterr().out
+    assert "warning" in capsys.readouterr().out
 
 
 def test_collect_raw_flattens_n_imputed_without_double_counting_the_total(outdir):
@@ -234,11 +230,10 @@ def test_collect_history_concatenates_and_survives_damaged_files(outdir, capsys)
     hist = tables.collect_history(outdir)
     assert len(hist) >= 6, "healthy histories were lost because of a damaged one"
     assert set(hist["model"]) >= {"vqc1", "mlp"}
-    assert "aviso" in capsys.readouterr().out
+    assert "warning" in capsys.readouterr().out
 
 
-# REGRESSAO: defeito encontrado em 2026-08-25 (rebuild/tabelas com dado degenerado) e CORRIGIDO
-# no mesmo dia. Este teste fica para impedir que volte.
+# Regression guard: rebuilding tables over degenerate data used to raise.
 def test_collect_history_survives_a_foreign_csv_in_the_runs_directory(outdir):
     _seed_disk(outdir, [("banknote", "vqc1", 0, 0.7)])
     storage.atomic_write_text(
@@ -251,9 +246,7 @@ def test_collect_history_on_a_missing_directory_is_empty(tmp_path):
     assert tables.collect_history(tmp_path / "nope").empty
 
 
-# ======================================================================
-# 3. aggregation and statistics
-# ======================================================================
+# --- 3. Aggregation and statistics ---
 def test_aggregate_reproduces_plain_numpy_statistics(full_dataset_on_disk):
     outdir, cells = full_dataset_on_disk
     raw = tables.collect_raw(outdir)
@@ -336,9 +329,7 @@ def test_wilcoxon_without_the_baseline_returns_an_empty_frame(outdir):
     assert tables.compute_wilcoxon(tables.collect_raw(outdir)).empty
 
 
-# ======================================================================
-# 4. paper artefacts
-# ======================================================================
+# --- 4. Paper artefacts ---
 def test_main_table_formats_mean_and_std_per_model(full_dataset_on_disk):
     outdir, _ = full_dataset_on_disk
     agg = tables.aggregate(tables.collect_raw(outdir))
@@ -377,8 +368,7 @@ def test_make_tables_runs_end_to_end_on_a_partial_grid(outdir):
     assert (outdir / "tables" / "complete.csv").exists()
 
 
-# REGRESSAO: defeito encontrado em 2026-08-25 (rebuild/tabelas com dado degenerado) e CORRIGIDO
-# no mesmo dia. Este teste fica para impedir que volte.
+# Regression guard: rebuilding tables over degenerate data used to raise.
 def test_make_tables_survives_a_cell_with_a_single_seed(outdir):
     _seed_disk(outdir, [("banknote", "vqc1", 0, 0.7), ("banknote", "mlp", 0, 0.6)])
     tables.make_tables(outdir)

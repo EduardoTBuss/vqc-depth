@@ -1,15 +1,13 @@
-"""Splits: determinism, pairing across models, and ABSENCE OF LEAKAGE.
+"""Splits: determinism, pairing across models, and absence of leakage.
 
-This is the file the paper leans on hardest.
-
-* The paired Wilcoxon is only legitimate if the 4 models of a given
-  ``(dataset, seed)`` saw literally the same rows.  ``make_split`` does not even
-  take a model argument, and these tests keep it that way -- including across
-  PROCESSES with different ``PYTHONHASHSEED``, which is exactly where a
+* The paired Wilcoxon is only legitimate if the four models of a given
+  ``(dataset, seed)`` saw literally the same rows.  ``make_split`` does not
+  even take a model argument, and these tests keep it that way across
+  processes with different ``PYTHONHASHSEED`` -- exactly where a
   ``hash()``-based implementation would silently start drifting.
-* The scaler and the imputer must be fitted on the training partition ONLY.
-  A reviewer's first question is "did you scale before splitting?"; the answer
-  has to be a test, not a paragraph.
+* The scaler and the imputer must be fitted on the training partition only.
+  A reviewer's first question is "did you scale before splitting?", and the
+  answer has to be a test rather than a paragraph.
 """
 
 from __future__ import annotations
@@ -32,9 +30,9 @@ CHILD = Path(__file__).resolve().parent / "_subprocess_split_child.py"
 
 @pytest.fixture
 def fake_dataset(monkeypatch):
-    """Inject a synthetic raw dataset into ``splits`` -- no cache, no network.
+    """Inject a synthetic raw dataset into ``splits``: no cache, no network.
 
-    Returns ``(X, y, feature_names)`` so the test can recompute, by hand, what
+    Returns ``(X, y, feature_names)`` so the test can recompute by hand what
     the split is supposed to produce.
     """
     raw = helpers.synthetic_raw(n=140, seed=0, n_nan=12)
@@ -42,9 +40,7 @@ def fake_dataset(monkeypatch):
     return raw
 
 
-# ======================================================================
-# 1. determinism and pairing
-# ======================================================================
+# --- 1. Determinism and pairing ---
 def test_split_is_a_pure_function_of_dataset_and_seed(fake_dataset):
     a = splits.make_split("banknote", 3)
     b = splits.make_split("banknote", 3)
@@ -55,7 +51,7 @@ def test_split_is_a_pure_function_of_dataset_and_seed(fake_dataset):
 
 
 def test_all_four_models_of_a_seed_get_byte_identical_splits(fake_dataset):
-    """THE test behind the paired Wilcoxon.
+    """The test behind the paired Wilcoxon.
 
     ``make_split`` takes no model, so the guarantee is structural; this pins it
     through the object the runner actually consumes, ``RunConfig``.
@@ -129,9 +125,7 @@ def test_unknown_dataset_is_rejected():
         splits.make_split("iris", 0)
 
 
-# ======================================================================
-# 2. index_hash contract
-# ======================================================================
+# --- 2. index_hash contract ---
 def test_index_hash_is_dtype_and_shape_invariant_but_order_sensitive():
     idx = np.array([5, 1, 9, 3], dtype=np.int32)
     assert splits.index_hash(idx) == splits.index_hash(idx.astype(np.int64))
@@ -146,9 +140,7 @@ def test_split_hashes_distinguish_swapped_partitions():
     assert splits.split_hashes(a, b, c)["all"] != splits.split_hashes(a, c, b)["all"]
 
 
-# ======================================================================
-# 3. cross-process stability
-# ======================================================================
+# --- 3. Cross-process stability ---
 def _run_child(mode: str, dataset: str, seed: int, hashseed: str) -> dict:
     env = dict(os.environ, PYTHONHASHSEED=hashseed)
     env.pop("PYTHONPATH", None)
@@ -166,8 +158,8 @@ def test_split_hashes_survive_a_change_of_PYTHONHASHSEED(fake_dataset):
     """Regression against seeding from the builtin ``hash()``.
 
     ``hash()`` of a str is salted per process, so an implementation based on it
-    would give a DIFFERENT split every time the Colab runtime restarts -- and
-    the 120 runs would no longer be paired.
+    would give a different split every time the Colab runtime restarts, and the
+    120 runs would no longer be paired.
     """
     a = _run_child("synthetic", "banknote", 0, "0")
     b = _run_child("synthetic", "banknote", 0, "12345")
@@ -192,11 +184,9 @@ def test_real_dataset_split_hashes_survive_a_change_of_PYTHONHASHSEED(uci_availa
     )
 
 
-# ======================================================================
-# 4. NO LEAKAGE -- the reviewer-proof part
-# ======================================================================
+# --- 4. No leakage: the reviewer-proof part ---
 def test_train_partition_hits_exactly_0_and_pi_on_every_feature(fake_dataset):
-    """The min-max fit happened on the TRAIN rows, so train spans [0, pi] exactly.
+    """The min-max fit happened on the train rows, so train spans [0, pi] exactly.
 
     If the scaler had been fitted on the full dataset, the training minimum
     would (almost surely) be > 0 and the maximum < pi.
@@ -223,7 +213,7 @@ def test_validation_and_test_are_allowed_to_leave_the_encoding_range(fake_datase
 
 def test_poisoning_validation_and_test_cannot_change_the_training_partition(
         monkeypatch):
-    """THE anti-leakage test.
+    """The anti-leakage test.
 
     Replace every held-out row with absurd values; the training partition and
     all four fingerprints must come out bit-identical.  Any statistic borrowed
@@ -247,7 +237,7 @@ def test_poisoning_validation_and_test_cannot_change_the_training_partition(
                  "The scaler and/or the imputer are seeing held-out data."),
     )
     np.testing.assert_array_equal(got.y_train, ref.y_train)
-    # sanity: the poisoning mechanism is real -- held-out rows DID change
+    # Sanity: the poisoning mechanism is real, held-out rows did change.
     assert not np.array_equal(got.X_test, ref.X_test)
 
 
@@ -285,16 +275,16 @@ def test_preprocessing_matches_an_independent_reference_implementation(fake_data
     np.testing.assert_allclose(sp.X_val, exp_va, rtol=1e-12, atol=1e-12)
     np.testing.assert_allclose(sp.X_test, exp_te, rtol=1e-12, atol=1e-12)
 
-    # and the median really is the TRAIN median, not the global one
+    # The median really is the train median, not the global one.
     global_med = np.nanmedian(X, axis=0)
     assert not np.allclose(med, global_med), (
         "train median and global median coincide on this fixture, so the test "
-        "cannot tell them apart -- change the fixture"
+        "cannot tell them apart; change the fixture"
     )
 
 
 def test_imputed_cells_carry_the_train_median_and_not_the_global_median(fake_dataset):
-    """Pin the imputed VALUE, cell by cell, in the scaled space."""
+    """Pin the imputed value, cell by cell, in the scaled space."""
     X, y, _ = fake_dataset
     sp = splits.make_split("banknote", 0)
 
@@ -336,17 +326,15 @@ def test_split_carries_no_extra_rows_and_the_right_dtypes(fake_dataset):
     assert set(np.unique(sp.y_train)) <= {0, 1}
 
 
-# ======================================================================
-# 5. golden fingerprints of the REAL grid splits
-# ======================================================================
+# --- 5. Golden fingerprints of the real grid splits ---
 @pytest.mark.network
 def test_real_split_fingerprints_are_frozen(uci_available):
-    """Golden values generated on 2026-08-25 with the current splits.py.
+    """Golden fingerprints of the study's split pipeline.
 
-    They pin the ENTIRE split pipeline of the study (index derivation, shuffle
-    order, largest-remainder allocation).  If they change, the 120 runs on disk
-    are no longer comparable with new ones: regenerate ON PURPOSE and rerun the
-    grid, do not just paste the new hashes.
+    They pin index derivation, shuffle order and largest-remainder allocation.
+    If they change, the 120 runs already on disk are no longer comparable with
+    new ones: regenerate deliberately and rerun the grid, do not paste the new
+    hashes to get green.
     """
     golden = {
         ("banknote", 0): "622e04d38d8bf3ccd70af308b7952a9d855d8c176db56c79b6ffa317be18215c",

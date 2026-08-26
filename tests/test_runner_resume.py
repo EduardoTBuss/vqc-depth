@@ -1,12 +1,11 @@
-"""Resume: an interrupted grid must converge to the SAME result as one that
+"""Resume: an interrupted grid must converge to the same result as one that
 never stopped.
 
-The Colab runtime dies.  It dies mid-grid, it dies mid-run, and it dies while
-writing to Drive.  The whole storage design (one file per run, atomic writes,
-"completed" as the only marker of done) exists for that.  These tests kill a
-grid on purpose -- by deleting files, by corrupting them, and by actually
-killing the process -- and demand that the reconstructed CSVs come out
-identical to an uninterrupted execution.
+The Colab runtime dies mid-grid, mid-run, and while writing to Drive.  The
+storage design -- one file per run, atomic writes, "completed" as the only
+marker of done -- exists for that.  These tests kill a grid on purpose, by
+deleting files, by corrupting them and by killing the process, and demand that
+the reconstructed CSVs come out identical to an uninterrupted execution.
 """
 
 from __future__ import annotations
@@ -58,9 +57,7 @@ def _predictions(outdir) -> dict[str, pd.DataFrame]:
     return out
 
 
-# ======================================================================
-# 1. pending() is the resume mechanism
-# ======================================================================
+# --- 1. Pending() is the resume mechanism ---
 def test_pending_lists_everything_before_the_first_run(outdir, tiny_dataset):
     grid = _grid()
     assert len(runner.pending(grid, outdir)) == len(grid) == 6
@@ -98,16 +95,14 @@ def test_pending_reclaims_a_run_whose_json_was_lost_or_corrupted(outdir, tiny_da
                     "banknote__vqc2__seed00"}, todo
 
 
-# ======================================================================
-# 2. IDEMPOTENCE: interrupted grid == uninterrupted grid
-# ======================================================================
+# --- 2. Idempotence: interrupted grid == uninterrupted grid ---
 def test_an_interrupted_grid_rebuilds_to_the_same_numbers(tmp_path, tiny_dataset,
                                                           capsys):
     """Run everything; destroy part of it the way a dead runtime would; resume.
 
     The reconstructed raw_results and the per-run predictions must come back
-    IDENTICAL (bit for bit, except wall-clock fields).  If they do not, results
-    depend on WHEN the runtime died -- and the grid is not reproducible.
+    identical bit for bit, except for wall-clock fields.  Otherwise the results
+    depend on when the runtime died and the grid is not reproducible.
     """
     grid = _grid()
 
@@ -185,9 +180,7 @@ def test_a_failing_cell_does_not_stop_the_others(outdir, tiny_dataset, monkeypat
         ["banknote__vqc2__seed00"]
 
 
-# ======================================================================
-# 3. what a completed run must contain
-# ======================================================================
+# --- 3. What a completed run must contain ---
 def test_a_completed_record_carries_the_split_fingerprints_and_the_test_metrics(
         outdir, tiny_dataset, capsys):
     runner.run_grid(_grid(), outdir)
@@ -218,7 +211,7 @@ def test_all_models_of_a_seed_recorded_the_same_split_hashes(outdir, tiny_datase
             f"({dict(zip(sub['model'], sub['split_hash_all']))}). The paired "
             f"Wilcoxon of the paper would be invalid."
         )
-    assert raw.groupby("model")["split_hash_all"].nunique().eq(2).all(), (
+    assert raw.groupby("model", observed=True)["split_hash_all"].nunique().eq(2).all(), (
         "each model should have seen exactly the 2 distinct seeds of this grid"
     )
 
@@ -272,9 +265,7 @@ def test_build_grid_covers_the_full_experiment_by_default():
     assert len({c.run_id for c in grid}) == 120, "duplicated run_id in the grid"
 
 
-# ======================================================================
-# 4. through the CLI, with a REAL process kill
-# ======================================================================
+# --- 4. Through the CLI, with a real process kill ---
 def _cli(args, timeout=180):
     return subprocess.run([sys.executable, "-m", "vqcdepth", *args],
                           capture_output=True, text=True, timeout=timeout,
@@ -287,8 +278,8 @@ def test_cli_status_reports_the_pending_grid_without_running_anything(tmp_path):
     out = tmp_path / "out"
     proc = _cli(["--part", "status", "--outdir", str(out)])
     assert proc.returncode == 0, proc.stderr
-    assert "grid selecionado: 120" in proc.stdout
-    assert "faltando:         120" in proc.stdout
+    assert "grid selected: 120" in proc.stdout
+    assert "missing:       120" in proc.stdout
     assert list((out / "runs").iterdir()) == [], "status executed a run"
 
 

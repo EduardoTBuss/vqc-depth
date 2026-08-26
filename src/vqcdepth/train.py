@@ -1,51 +1,31 @@
-"""Training loop -- structurally IDENTICAL for the VQCs and for the MLP.
+"""Training loop -- structurally identical for the VQCs and for the MLP.
 
-The experiment has ONE independent variable: circuit depth.  Everything the
-loop does (epoch definition, batch order, loss, optimizer, epoch budget, model
-selection, logged quantities) is therefore shared between the quantum and the
-classical branch; the only thing that differs is the object being
-differentiated, isolated behind the two ``_Engine`` classes below.
+Circuit depth is the only independent variable, so epoch definition, batch
+order, loss, optimizer, epoch budget, model selection and logged quantities are
+shared by both branches; only the object being differentiated changes, isolated
+behind the two ``_Engine`` classes.
 
-Definition of EPOCH (differs from the qnn-benchmark repo!)
----------------------------------------------------------
-One epoch = ONE FULL SWEEP over the training set in minibatches of
-``cfg.batch_size``, with the training set reshuffled at the start of every
-epoch.  Banknote has ~960 training samples -> ~60 optimizer steps per epoch ->
-~6,000 steps per 100-epoch run.  In ``qnn-benchmark`` an "epoch" was a SINGLE
-minibatch step; never extrapolate timings from there to here.
+One epoch here is a full sweep over the training set in minibatches of
+``cfg.batch_size``, reshuffled every epoch (Banknote: ~960 training samples ->
+~60 optimizer steps per epoch).  In the author's qnn-benchmark repo an "epoch"
+is a single minibatch step, so timings do not transfer between the two.
 
-Test set
---------
-``split.X_test`` / ``split.y_test`` are NEVER read by this module.  Model
-selection ("best epoch") uses the VALIDATION set only: highest ``val_f1``,
-ties broken by lowest ``val_loss``.  Test-set inference happens downstream,
-once, using ``TrainOutput.best_params``.
+``split.X_test`` / ``split.y_test`` are never read here.  Model selection uses
+the validation set only -- highest ``val_f1``, ties broken by lowest
+``val_loss`` -- and test-set inference happens downstream, once, from
+``TrainOutput.best_params``.
 
-Randomness
-----------
-Two independent, explicitly-seeded streams, both derived with ``hashlib``
-(deterministic across processes -- the builtin ``hash()`` of a str is salted by
-PYTHONHASHSEED and must NOT be used for this):
+Two explicitly seeded streams, derived with ``hashlib`` so they stay stable
+across processes (the builtin ``hash()`` of a str is salted by PYTHONHASHSEED).
+The batch stream is f(dataset, seed), independent of the model, so all four
+models see the same shuffling of the same split and the comparison is paired.
+The init stream is f(dataset, model, seed), because the parameter tensors have
+different shapes and a shared stream would make VQC-1's angles a prefix of
+VQC-2's.
 
-* batch stream  = f(dataset, seed)          -- NOT a function of the model.
-  All four models therefore see the SAME shuffling of the SAME split for a
-  given (dataset, seed).  This is what makes the comparison paired: the model
-  is the independent variable, so data order is held fixed across models.
-* init stream   = f(dataset, model, seed)   -- IS a function of the model,
-  because the parameter tensors have different shapes (8/16/32 angles, 81
-  torch weights).  Sharing one stream would make VQC-1's angles a prefix of
-  VQC-2's, an arbitrary coupling with no scientific justification.
-
-Cost of the per-epoch diagnostics
----------------------------------
-``gradient_norm`` costs NOTHING extra: the loop reproduces what
-``AdamOptimizer.step_and_cost`` does internally (``compute_grad`` then
-``apply_grad``) and simply keeps the gradient that was already computed for the
-update.  ``parameter_norm`` is a norm over the parameter tensor, no circuit
-call.  The per-epoch metrics DO cost two extra forward passes (one over the
-training set, one over the validation set), both fully broadcast (a single
-device execution each) -- their measured cost is reported in the pilot and
-also returned in ``TrainOutput.timing_breakdown``.
+``gradient_norm`` and ``parameter_norm`` cost nothing extra: the loop keeps the
+gradient the optimizer already computed.  The per-epoch metrics do cost two
+broadcast forward passes, reported in ``TrainOutput.timing_breakdown``.
 """
 
 from __future__ import annotations
@@ -77,26 +57,22 @@ __all__ = [
     "train_model",
 ]
 
-# --- numerical guards / optimizer constants --------------------------------
-# Not experimental hyperparameters (those live in config.py), just numerics.
-_BCE_EPS = 1e-7               # probability clipping, identical in both branches
-_ADAM_BETAS = (0.9, 0.999)    # textbook Adam.  NOTE: qml.AdamOptimizer defaults
-_ADAM_EPS = 1e-8              # to beta2=0.99 and torch to 0.999 -- pinned here
-                              # so quantum and classical use the SAME optimizer.
+# Numerics, not experimental hyperparameters (those live in config.py).
+# The Adam constants are pinned because qml.AdamOptimizer defaults to
+# beta2=0.99 and torch to 0.999; both branches must use the same optimizer.
+_BCE_EPS = 1e-7
+_ADAM_BETAS = (0.9, 0.999)
+_ADAM_EPS = 1e-8
 
 
-# ======================================================================
-# Records
-# ======================================================================
+# --- Records ---
 @dataclass
 class EpochRecord:
-    """One row per epoch -- EVERY epoch is recorded, no subsampling.
+    """One row per epoch, no subsampling.
 
-    gradient_norm    : mean over the epoch's optimizer steps of ||grad||_2
-                       (the gradients the optimizer already used; free).
-    parameter_norm   : ||theta||_2 at the END of the epoch.
-    elapsed_seconds  : wall time of THIS epoch (optimizer steps + metrics),
-                       excluding checkpoint I/O.
+    gradient_norm   : mean of ||grad||_2 over the epoch's optimizer steps.
+    parameter_norm  : ||theta||_2 at the end of the epoch.
+    elapsed_seconds : wall time of the epoch, excluding checkpoint I/O.
     """
     epoch: int
     train_loss: float
@@ -114,33 +90,29 @@ class EpochRecord:
 @dataclass
 class TrainOutput:
     history: list[EpochRecord]
-    best_epoch: int                 # 1-based; selected on VALIDATION only
+    best_epoch: int                 # 1-based, selected on validation only
     best_val_loss: float
     best_val_f1: float
-    best_params: object             # weights of the best epoch (for test-time)
+    best_params: object             # weights of the best epoch, for test time
     final_params: object
     training_time_seconds: float
     n_parameters: int
-    # extra, defaulted: pilot instrumentation (seconds spent per phase)
-    timing_breakdown: dict = field(default_factory=dict)
+    timing_breakdown: dict = field(default_factory=dict)  # seconds per phase
 
 
-# ======================================================================
-# Deterministic seeding
-# ======================================================================
+# --- Deterministic seeding ---
 def stable_key(*parts: object) -> int:
     """64-bit key from strings/ints, stable across processes and platforms.
 
-    Uses sha256 -- NOT the builtin hash(), which is randomised per process for
-    str/bytes (PYTHONHASHSEED) and silently breaks cross-process
-    reproducibility.  That bug exists in qnn-benchmark's batch_rng; fixed here.
+    sha256 rather than the builtin hash(), which is randomised per process for
+    str/bytes and would break cross-process reproducibility.
     """
     payload = "\x1f".join(str(p) for p in parts).encode("utf-8")
     return int.from_bytes(hashlib.sha256(payload).digest()[:8], "little")
 
 
 def batch_rng(dataset: str, seed: int) -> np.random.Generator:
-    """Minibatch-shuffling stream.  Function of (dataset, seed) ONLY."""
+    """Minibatch-shuffling stream. Function of (dataset, seed) only."""
     ss = np.random.SeedSequence(entropy=[int(seed), stable_key("batch", dataset)])
     return np.random.default_rng(ss)
 
@@ -152,15 +124,13 @@ def init_rng(dataset: str, model: str, seed: int) -> np.random.Generator:
 
 
 def torch_generator(dataset: str, model: str, seed: int) -> torch.Generator:
-    """torch.Generator for the MLP init -- same entropy as init_rng."""
+    """torch.Generator for the MLP init, same entropy as init_rng."""
     g = torch.Generator()
     g.manual_seed(int(init_rng(dataset, model, seed).integers(0, 2 ** 63 - 1)))
     return g
 
 
-# ======================================================================
-# Loss and metrics (identical functional in both branches)
-# ======================================================================
+# --- Loss and metrics (identical functional in both branches) ---
 def bce_numpy(proba: np.ndarray, y: np.ndarray) -> float:
     p = np.clip(np.asarray(proba, dtype=np.float64), _BCE_EPS, 1.0 - _BCE_EPS)
     t = np.asarray(y, dtype=np.float64)
@@ -179,15 +149,13 @@ def _metrics(y_true: np.ndarray, proba: np.ndarray, with_auc: bool) -> dict:
         try:
             out["roc_auc"] = float(roc_auc_score(y_true, proba))
         except ValueError:
-            # only reachable if a partition is single-class (splits are
-            # stratified, so this should never fire); NaN, not a fake 0.5.
+            # Only reachable for a single-class partition; splits are
+            # stratified, so this should not fire. NaN, not a fake 0.5.
             out["roc_auc"] = float("nan")
     return out
 
 
-# ======================================================================
-# Engines -- the ONLY place where quantum and classical differ
-# ======================================================================
+# --- Engines: the only place where quantum and classical differ ---
 class _QuantumEngine:
     """PennyLane + autograd VQC, batched via parameter broadcasting."""
 
@@ -217,8 +185,8 @@ class _QuantumEngine:
             p = pnp.clip(p, _BCE_EPS, 1.0 - _BCE_EPS)
             return -pnp.mean(yt * pnp.log(p) + (1.0 - yt) * pnp.log(1.0 - p))
 
-        # Exactly what AdamOptimizer.step_and_cost does internally -- unrolled
-        # only so the gradient can be read without a second circuit pass.
+        # What AdamOptimizer.step_and_cost does internally, unrolled so the
+        # gradient can be read without a second circuit pass.
         grad, loss = self.opt.compute_grad(cost, (self.params,), {})
         self.params = self.opt.apply_grad(grad, (self.params,))[0]
         gnorm = float(np.linalg.norm(np.asarray(grad[0], dtype=np.float64).ravel()))
@@ -231,7 +199,7 @@ class _QuantumEngine:
         return float(np.linalg.norm(np.asarray(self.params, dtype=np.float64).ravel()))
 
     def snapshot(self) -> object:
-        """Plain float64 array -- what circuits.predict_proba expects."""
+        """Plain float64 array, the form circuits.predict_proba expects."""
         return np.array(np.asarray(self.params, dtype=np.float64), copy=True)
 
     @staticmethod
@@ -240,7 +208,7 @@ class _QuantumEngine:
 
 
 class _TorchEngine:
-    """Classical MLP baseline.  Same loss, same optimizer, same schedule."""
+    """Classical MLP baseline. Same loss, optimizer and schedule."""
 
     kind = "classical"
 
@@ -261,7 +229,7 @@ class _TorchEngine:
         p = torch.clamp(self.model(xb), _BCE_EPS, 1.0 - _BCE_EPS)
         loss = -torch.mean(yt * torch.log(p) + (1.0 - yt) * torch.log(1.0 - p))
         loss.backward()
-        # gradient already computed for the update -> free to read
+        # Gradient already computed for the update, so reading it is free.
         sq = sum(float(pp.grad.pow(2).sum()) for pp in self.model.parameters()
                  if pp.grad is not None)
         self.opt.step()
@@ -275,7 +243,7 @@ class _TorchEngine:
         return float(np.sqrt(sq))
 
     def snapshot(self) -> object:
-        """A detached copy of the whole module (81 params -- cheap)."""
+        """Detached copy of the whole module (81 params, cheap)."""
         return models.clone_mlp(self.model)
 
     @staticmethod
@@ -288,9 +256,7 @@ def make_engine(cfg):
     return _QuantumEngine(cfg) if cfg.is_quantum else _TorchEngine(cfg)
 
 
-# ======================================================================
-# Checkpoints -- experiment ARTEFACTS, not a resume mechanism
-# ======================================================================
+# --- Checkpoints: experiment artefacts, not a resume mechanism ---
 def _atomic_save_npz(path: Path, arrays: dict[str, np.ndarray]) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     with open(tmp, "wb") as fh:
@@ -331,12 +297,10 @@ def _write_checkpoint(directory: Path, cfg, tag: str, engine, snap,
     })
 
 
-# ======================================================================
-# The loop
-# ======================================================================
+# --- The loop ---
 def train_model(cfg, split: Split, checkpoint_dir: str | os.PathLike | None = None,
                 verbose: bool = False) -> TrainOutput:
-    """Train one grid cell.  Same code path for vqc1 / vqc2 / vqc4 / mlp."""
+    """Train one grid cell. Same code path for vqc1 / vqc2 / vqc4 / mlp."""
     if cfg.dataset != getattr(split, "dataset", cfg.dataset):
         raise ValueError(f"split is for {split.dataset!r}, cfg for {cfg.dataset!r}")
     if cfg.seed != getattr(split, "seed", cfg.seed):
@@ -366,7 +330,7 @@ def train_model(cfg, split: Split, checkpoint_dir: str | os.PathLike | None = No
     for epoch in range(1, cfg.n_epochs + 1):
         t_epoch = time.perf_counter()
 
-        # --- one FULL sweep of the training set, reshuffled ------------
+        # One full sweep of the training set, reshuffled.
         perm = rng.permutation(n_train)
         gnorms: list[float] = []
         ts = time.perf_counter()
@@ -376,7 +340,7 @@ def train_model(cfg, split: Split, checkpoint_dir: str | os.PathLike | None = No
             gnorms.append(gnorm)
         t_step += time.perf_counter() - ts
 
-        # --- metrics at the epoch's FINAL parameters -------------------
+        # Metrics at the epoch's final parameters.
         ts = time.perf_counter()
         tr = _metrics(y_tr, engine.proba(X_tr), with_auc=False)
         t_train_metrics += time.perf_counter() - ts
@@ -395,7 +359,7 @@ def train_model(cfg, split: Split, checkpoint_dir: str | os.PathLike | None = No
         )
         history.append(rec)
 
-        # --- model selection: VALIDATION only, test never touched ------
+        # Model selection: validation only, test never touched.
         improved = (rec.val_f1 > best_val_f1) or (
             rec.val_f1 == best_val_f1 and rec.val_loss < best_val_loss
         )
@@ -409,7 +373,7 @@ def train_model(cfg, split: Split, checkpoint_dir: str | os.PathLike | None = No
                   f"val_f1={rec.val_f1:.4f} |g|={rec.gradient_norm:.4f} "
                   f"({rec.elapsed_seconds:.2f}s)", flush=True)
 
-        # --- checkpoints (artefacts for the paper) ---------------------
+        # Checkpoints (artefacts for the paper).
         if ckpt_dir is not None and cfg.save_checkpoints:
             ts = time.perf_counter()
             if epoch % cfg.checkpoint_every == 0 or epoch == cfg.n_epochs:

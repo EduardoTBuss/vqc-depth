@@ -1,2 +1,2 @@
-"""vqc-depth — infraestrutura experimental do estudo ERAMIA-RS 2026."""
+"""vqc-depth -- experimental infrastructure for the ERAMIA-RS 2026 depth study."""
 __version__ = "0.1.0"

@@ -1,12 +1,9 @@
-"""Reconstrucao dos CSVs a partir dos runs + tabelas agregadas + estatistica.
+"""Rebuild of the CSVs from the per-run files + aggregated tables + statistics.
 
-O rebuild e' o que salva a sessao quando o Colab morre antes de gerar CSV:
-os arquivos por run ja estao no Drive, e daqui saem os CSVs. Funciona com
-GRID PARCIAL de proposito - o pesquisador precisa olhar 20 de 120 runs sem
-esperar o grid inteiro.
-
-Nao ha CSV compartilhado sendo apendado em lugar nenhum: tudo aqui e' leitura
-dos arquivos por run e escrita atomica do agregado.
+The rebuild is what saves a session when Colab dies before any CSV is written:
+the per-run files are already on Drive and the CSVs are derived from them. It
+works on a PARTIAL grid on purpose. Nothing here appends to a shared CSV --
+every aggregate is a read of the per-run files plus one atomic write.
 """
 
 from __future__ import annotations
@@ -18,7 +15,7 @@ import pandas as pd
 
 from . import config, storage
 
-# Ordem canonica das colunas do raw_results.csv (schema do paragrafo 11).
+# Canonical column order of raw_results.csv (schema of paragraph 11).
 RAW_COLUMNS = [
     "run_id", "dataset", "model", "seed", "n_layers", "n_qubits", "n_parameters",
     "train_samples", "val_samples", "test_samples",
@@ -37,7 +34,7 @@ DATASET_ORDER = list(config.DATASETS)
 
 
 def _ordered(df: pd.DataFrame, col: str, order: list) -> pd.DataFrame:
-    """Ordena por uma coluna categorica sem perder valores fora da ordem."""
+    """Order by a categorical column without dropping values outside `order`."""
     if col not in df.columns or df.empty:
         return df
     known = [v for v in order if v in set(df[col])]
@@ -50,15 +47,14 @@ def _ordered(df: pd.DataFrame, col: str, order: list) -> pd.DataFrame:
 # -- rebuild ----------------------------------------------------------
 
 def collect_raw(outdir) -> pd.DataFrame:
-    """Le todos os runs do disco e monta o raw_results."""
+    """Read every run from disk and assemble raw_results."""
     records = [r for r in storage.iter_runs(outdir) if r.get("status") == "completed"]
     if not records:
         return pd.DataFrame(columns=RAW_COLUMNS)
     df = pd.DataFrame(records)
-    # n_imputed e' um dict aninhado; achata para nao poluir o CSV
     if "n_imputed" in df.columns:
-        # ATENCAO: n_imputed traz train/val/test E TAMBEM 'total'. Somar
-        # d.values() contaria dobrado - somar so as tres particoes.
+        # n_imputed carries train/val/test AND 'total'; summing d.values() would
+        # count every imputation twice. Only the three partitions are summed.
         df["n_imputed_total"] = df["n_imputed"].apply(
             lambda d: int(sum(d[k] for k in ("train", "val", "test") if k in d))
             if isinstance(d, dict) else 0)
@@ -71,7 +67,7 @@ def collect_raw(outdir) -> pd.DataFrame:
 
 
 def collect_history(outdir) -> pd.DataFrame:
-    """Concatena o historico de TODAS as epocas de todos os runs."""
+    """Concatenate the per-epoch history of every run."""
     d = Path(outdir) / "runs"
     if not d.exists():
         return pd.DataFrame()
@@ -79,22 +75,27 @@ def collect_history(outdir) -> pd.DataFrame:
     for p in sorted(d.glob("*__history.csv")):
         try:
             frames.append(pd.read_csv(p))
-        except Exception as e:  # arquivo truncado nao derruba o rebuild
-            print(f"  [aviso] historico ilegivel, ignorado: {p.name} ({e})")
+        except Exception as e:  # a truncated file must not kill the rebuild
+            print(f"  [warning] unreadable history, skipped: {p.name} ({e})")
+    if not frames:
+        return pd.DataFrame()
+    # Drop empty frames before concat: pandas warns on all-NA entries and
+    # will change the resulting dtypes in a future version.
+    frames = [f for f in frames if not f.empty]
     if not frames:
         return pd.DataFrame()
     df = pd.concat(frames, ignore_index=True)
-    # Um CSV estranho na pasta (ou truncado no cabecalho) injeta NaN em
-    # dataset/model, e _ordered rejeita categoria nula - derrubando o rebuild
-    # inteiro por causa de um arquivo.
+    # A foreign or header-truncated CSV in the folder injects NaN into
+    # dataset/model, and _ordered rejects a null category -- which would take
+    # down the whole rebuild because of one file.
     for c in ("dataset", "model"):
         if c not in df.columns:
             df[c] = np.nan
-    ruins = df["dataset"].isna() | df["model"].isna()
-    if ruins.any():
-        print(f"  [aviso] {int(ruins.sum())} linhas de historico sem "
-              f"dataset/model foram descartadas")
-        df = df[~ruins].copy()
+    bad = df["dataset"].isna() | df["model"].isna()
+    if bad.any():
+        print(f"  [warning] {int(bad.sum())} history rows without "
+              f"dataset/model were discarded")
+        df = df[~bad].copy()
     if df.empty:
         return pd.DataFrame()
     df = _ordered(_ordered(df, "dataset", DATASET_ORDER), "model", MODEL_ORDER)
@@ -102,7 +103,7 @@ def collect_history(outdir) -> pd.DataFrame:
 
 
 def aggregate(raw: pd.DataFrame) -> pd.DataFrame:
-    """Media, desvio, mediana e IQR por (dataset, model). n = seeds completas."""
+    """Mean, std, median and IQR per (dataset, model); n = completed seeds."""
     if raw.empty:
         return pd.DataFrame()
     metrics = [c for c in raw.columns
@@ -130,15 +131,14 @@ def aggregate(raw: pd.DataFrame) -> pd.DataFrame:
     return agg.sort_values(["dataset", "model"]).reset_index(drop=True)
 
 
-# -- estatistica ------------------------------------------------------
+# -- statistics -------------------------------------------------------
 
 def holm(pvals) -> np.ndarray:
-    """Correcao de Holm-Bonferroni; devolve p ajustados na ordem de entrada.
+    """Holm-Bonferroni correction; returns adjusted p in the input order.
 
-    Sao varias comparacoes por dataset (cada modelo contra o baseline).
-    Reportar p bruto a 0,05 com multiplas comparacoes e' exatamente o que
-    revisor marca. Holm e' uniformemente mais poderoso que Bonferroni e nao
-    assume independencia.
+    There are several comparisons per dataset, so raw p-values at 0.05 would
+    not survive review. Holm is uniformly more powerful than Bonferroni and
+    assumes no independence.
     """
     p = np.asarray(pvals, dtype=float)
     ok = ~np.isnan(p)
@@ -151,18 +151,18 @@ def holm(pvals) -> np.ndarray:
     adj, running = np.empty(m), 0.0
     for rank, i in enumerate(idx):
         running = max(running, (m - rank) * pv[i])
-        adj[i] = min(1.0, running)      # monotonia forcada
+        adj[i] = min(1.0, running)      # enforce monotonicity
     out[ok] = adj
     return out
 
 
 def compute_wilcoxon(raw: pd.DataFrame, baseline: str = "mlp",
                      metric: str = "test_f1") -> pd.DataFrame:
-    """Wilcoxon pareado POR SEED entre cada modelo e o baseline.
+    """Seed-paired Wilcoxon between each model and the baseline.
 
-    O pareamento so e' legitimo porque os 4 modelos do mesmo (dataset, seed)
-    viram exatamente o mesmo split - e ha um teste que garante isso pelos
-    hashes. Sem essa garantia, este teste seria invalido.
+    The pairing is only legitimate because the four models of a given
+    (dataset, seed) see exactly the same split, which a test enforces through
+    the split hashes.
     """
     from scipy.stats import wilcoxon
 
@@ -187,12 +187,12 @@ def compute_wilcoxon(raw: pd.DataFrame, baseline: str = "mlp",
                 try:
                     _, p = wilcoxon(a, b)
                 except ValueError:
-                    p = np.nan      # todas as diferencas nulas
+                    p = np.nan      # all differences are zero
                 delta = float(np.median(b - a))
             family.append({
                 "dataset": ds, "metric": metric,
                 "model_A": baseline, "model_B": mdl, "n_pairs": n,
-                "median_delta": delta,     # >0 = model_B melhor que o baseline
+                "median_delta": delta,     # >0 = model_B beats the baseline
                 "p_value": p,
             })
         for rec, padj in zip(family, holm([r["p_value"] for r in family])):
@@ -202,10 +202,7 @@ def compute_wilcoxon(raw: pd.DataFrame, baseline: str = "mlp",
 
 
 def compute_depth_wilcoxon(raw: pd.DataFrame, metric: str = "test_f1") -> pd.DataFrame:
-    """Comparacoes entre profundidades - e' isto que responde a RQ1.
-
-    vqc1 vs vqc2, vqc2 vs vqc4, vqc1 vs vqc4. Holm sobre as 3 por dataset.
-    """
+    """Depth-vs-depth comparisons (RQ1), with Holm over the 3 per dataset."""
     from scipy.stats import wilcoxon
 
     if raw.empty:
@@ -238,21 +235,20 @@ def compute_depth_wilcoxon(raw: pd.DataFrame, metric: str = "test_f1") -> pd.Dat
     return pd.DataFrame(rows)
 
 
-# -- tabelas para o paper ---------------------------------------------
+# -- tables for the paper ---------------------------------------------
 
 def main_table(agg: pd.DataFrame) -> pd.DataFrame:
-    """Tabela PRINCIPAL: F1 medio +- dp por dataset x modelo."""
+    """Main table: mean +- std of test F1 per dataset x model."""
     if agg.empty:
         return pd.DataFrame()
     t = agg.pivot_table(index="dataset", columns="model", values="test_f1_mean",
                         observed=True)
     s = agg.pivot_table(index="dataset", columns="model", values="test_f1_std",
                         observed=True)
-    # pivot_table DESCARTA coluna inteiramente NaN: uma celula com uma unica
-    # seed tem std=NaN, some de `s`, e s[c] levantaria KeyError. Isso quebraria
-    # --part tables durante quase toda a execucao no Colab (grid parcial).
-    # reindexa LINHAS e COLUNAS: se toda std for NaN (grid so com celulas
-    # de uma seed), pivot_table devolve um frame sem linhas nem colunas.
+    # pivot_table DROPS an all-NaN column: a single-seed cell has std=NaN,
+    # disappears from `s`, and s[c] would raise KeyError -- breaking
+    # --part tables for most of a Colab session (partial grid). Both axes are
+    # reindexed because an all-NaN std yields a frame with no rows or columns.
     s = s.reindex(index=t.index, columns=t.columns)
     out = t.copy().astype(object)
     for c in t.columns:
@@ -261,7 +257,7 @@ def main_table(agg: pd.DataFrame) -> pd.DataFrame:
             if pd.isna(m):
                 vals.append("--")
             elif pd.isna(d):
-                vals.append(f"{m:.3f} (n=1)")   # uma seed so: sem desvio
+                vals.append(f"{m:.3f} (n=1)")   # single seed: no spread to show
             else:
                 vals.append(f"{m:.3f} +- {d:.3f}")
         out[c] = vals
@@ -269,7 +265,7 @@ def main_table(agg: pd.DataFrame) -> pd.DataFrame:
 
 
 def secondary_table(agg: pd.DataFrame) -> pd.DataFrame:
-    """Tabela SECUNDARIA: parametros / tempo de treino / melhor epoca."""
+    """Secondary table: parameters / training time / best epoch."""
     if agg.empty:
         return pd.DataFrame()
     cols = ["dataset", "model", "n_parameters", "training_time_seconds_mean",
@@ -279,7 +275,7 @@ def secondary_table(agg: pd.DataFrame) -> pd.DataFrame:
 
 def _to_latex(df: pd.DataFrame, caption: str, label: str) -> str:
     if df.empty:
-        return f"% tabela vazia: {label}\n"
+        return f"% empty table: {label}\n"
     body = df.to_latex(index=False, escape=True, float_format="%.3f")
     return (f"\\begin{{table}}[t]\n\\centering\n\\caption{{{caption}}}\n"
             f"\\label{{tab:{label}}}\n{body}\\end{{table}}\n")
@@ -287,16 +283,16 @@ def _to_latex(df: pd.DataFrame, caption: str, label: str) -> str:
 
 def write_tables(outdir, agg: pd.DataFrame, wdf: pd.DataFrame,
                  ddf: pd.DataFrame) -> list[Path]:
-    """Grava CSV + Markdown + LaTeX de cada tabela."""
+    """Write CSV + Markdown + LaTeX for every table."""
     tdir = Path(outdir) / "tables"
     tdir.mkdir(parents=True, exist_ok=True)
     written = []
     specs = [
-        ("main_f1", main_table(agg), "F1 no teste (media +- desvio sobre 10 seeds)"),
-        ("secondary_cost", secondary_table(agg), "Parametros, tempo de treino e melhor epoca"),
-        ("complete", agg, "Todas as metricas agregadas"),
-        ("wilcoxon_vs_baseline", wdf, "Wilcoxon pareado por seed contra a MLP (p corrigido por Holm)"),
-        ("wilcoxon_depth", ddf, "Wilcoxon pareado por seed entre profundidades (p corrigido por Holm)"),
+        ("main_f1", main_table(agg), "Test F1 (mean +- standard deviation over 10 seeds)"),
+        ("secondary_cost", secondary_table(agg), "Parameters, training time and best epoch"),
+        ("complete", agg, "All aggregated metrics"),
+        ("wilcoxon_vs_baseline", wdf, "Seed-paired Wilcoxon against the MLP (Holm-corrected p)"),
+        ("wilcoxon_depth", ddf, "Seed-paired Wilcoxon across depths (Holm-corrected p)"),
     ]
     for name, df, caption in specs:
         if df is None or df.empty:
@@ -304,21 +300,21 @@ def write_tables(outdir, agg: pd.DataFrame, wdf: pd.DataFrame,
         storage.atomic_write_text(tdir / f"{name}.csv", df.to_csv(index=False))
         storage.atomic_write_text(tdir / f"{name}.tex", _to_latex(df, caption, name))
         written += [tdir / f"{name}.{e}" for e in ("csv", "tex")]
-        # markdown depende de 'tabulate', que e' opcional no pandas: se faltar,
-        # NAO vale perder o CSV e o LaTeX (que sao os que vao para o paper).
+        # Markdown needs 'tabulate', an optional pandas dependency: losing it
+        # must not cost the CSV and the LaTeX, which are what the paper uses.
         try:
             storage.atomic_write_text(tdir / f"{name}.md", df.to_markdown(index=False))
             written.append(tdir / f"{name}.md")
         except ImportError:
-            print(f"  [aviso] 'tabulate' ausente; {name}.md nao gerado "
-                  f"(csv e tex ok). pip install tabulate")
+            print(f"  [warning] 'tabulate' not installed; {name}.md not generated "
+                  f"(csv and tex are fine). pip install tabulate")
     return written
 
 
-# -- entradas do CLI --------------------------------------------------
+# -- CLI entry points -------------------------------------------------
 
 def rebuild(outdir) -> dict:
-    """--part rebuild: reconstroi os CSVs a partir dos arquivos por run."""
+    """--part rebuild: rebuild the CSVs from the per-run files."""
     storage.ensure_layout(outdir)
     raw = collect_raw(outdir)
     hist = collect_history(outdir)
@@ -332,16 +328,16 @@ def rebuild(outdir) -> dict:
         storage.atomic_write_text(rdir / "summary.csv", agg.to_csv(index=False))
 
     total = len(config.DATASETS) * len(config.MODELS) * len(config.SEEDS)
-    print(f"\n  runs lidos: {len(raw)}/{total}  |  epocas no historico: {len(hist)}")
+    print(f"\n  runs read: {len(raw)}/{total}  |  epochs in history: {len(hist)}")
     if not raw.empty:
-        print("\n  runs por dataset/modelo (esperado "
-              f"{len(config.SEEDS)} cada):")
+        print("\n  runs per dataset/model (expected "
+              f"{len(config.SEEDS)} each):")
         print(raw.groupby(["dataset", "model"], observed=True).size().to_string())
-        faltando = _missing(raw)
-        if faltando:
-            print(f"\n  faltam {len(faltando)} runs. Primeiros: "
-                  f"{', '.join(faltando[:8])}{' ...' if len(faltando) > 8 else ''}")
-    print(f"\n  CSVs em {rdir}")
+        missing = _missing(raw)
+        if missing:
+            print(f"\n  {len(missing)} runs missing. First: "
+                  f"{', '.join(missing[:8])}{' ...' if len(missing) > 8 else ''}")
+    print(f"\n  CSVs in {rdir}")
     return {"raw": raw, "history": hist, "summary": agg}
 
 
@@ -353,16 +349,16 @@ def _missing(raw: pd.DataFrame) -> list[str]:
 
 
 def make_tables(outdir) -> dict:
-    """--part tables: agregados + Wilcoxon + arquivos para o paper."""
+    """--part tables: aggregates + Wilcoxon + the files that go to the paper."""
     data = rebuild(outdir)
     raw, agg = data["raw"], data["summary"]
     wdf = compute_wilcoxon(raw) if not raw.empty else pd.DataFrame()
     ddf = compute_depth_wilcoxon(raw) if not raw.empty else pd.DataFrame()
     written = write_tables(outdir, agg, wdf, ddf)
     if written:
-        print(f"\n  {len(written)} arquivos de tabela em {Path(outdir) / 'tables'}")
+        print(f"\n  {len(written)} table files in {Path(outdir) / 'tables'}")
     else:
-        print("\n  nada para tabular ainda (nenhum run completo).")
+        print("\n  nothing to tabulate yet (no completed run).")
     if not agg.empty:
         print("\n" + main_table(agg).to_string(index=False))
     return {**data, "wilcoxon": wdf, "wilcoxon_depth": ddf}

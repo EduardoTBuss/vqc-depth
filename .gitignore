@@ -8,7 +8,7 @@ dist/
 .venv/
 venv/
 
-# dados baixados e saidas de execucao NUNCA vao para o repo
+# downloaded data and run outputs NEVER go into the repository
 data/cache/
 data/raw/
 data/processed/
@@ -22,5 +22,5 @@ logs/
 runs/
 env.json
 
-# scratch dos agentes
+# agent scratch files
 _scratch_*.py

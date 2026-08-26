@@ -1,79 +1,65 @@
-"""Configuração central do experimento ERAMIA-RS 2026 (profundidade de VQC).
+"""Central configuration of the ERAMIA-RS 2026 VQC depth experiment.
 
-TODA constante do experimento vive aqui. Nenhum outro módulo define
-hiperparâmetro. A variável independente do estudo é UMA SÓ: a profundidade
-do circuito (n_layers em 1, 2, 4).
-
-Nota crítica sobre ÉPOCA
-------------------------
-Aqui, uma ÉPOCA é uma varredura COMPLETA do conjunto de treino em minibatches
-de tamanho BATCH_SIZE. Isso é diferente do repositório `qnn-benchmark`, onde
-"época" era UM ÚNICO passo de minibatch. A diferença de custo é de ordens de
-grandeza (Banknote: ~60 passos/época x 100 épocas = ~6.000 passos por run).
-Nunca extrapole tempo do qnn-benchmark para cá.
+Every experiment constant lives here; the single independent variable is
+circuit depth (n_layers in 1, 2, 4). One epoch is a COMPLETE sweep over the
+training set in minibatches of BATCH_SIZE (banknote: ~60 steps/epoch x 100
+epochs = ~6000 optimizer steps per run); the `qnn-benchmark` repository calls a
+single minibatch step an "epoch", so its runtimes do not transfer here.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Sequence
+from dataclasses import dataclass
 
-# ── Grid do experimento ───────────────────────────────────────────────
+# -- experiment grid --------------------------------------------------
 DATASETS: tuple[str, ...] = ("banknote", "blood", "mammographic")
 MODELS: tuple[str, ...] = ("vqc1", "vqc2", "vqc4", "mlp")
 SEEDS: tuple[int, ...] = tuple(range(10))
 
-# ── Circuito quântico (fixo; só N_LAYERS varia entre modelos) ─────────
+# -- quantum circuit (fixed; only N_LAYERS varies across models) -------
 N_QUBITS: int = 4
 VQC_LAYERS: dict[str, int] = {"vqc1": 1, "vqc2": 2, "vqc4": 4}
-# params por camada = N_QUBITS * 2  (RY(theta) e RZ(theta) por qubit)
-PARAMS_PER_LAYER: int = N_QUBITS * 2
+PARAMS_PER_LAYER: int = N_QUBITS * 2   # RY(theta) and RZ(theta) per qubit
 
-# ── MLP baseline (NÃO é objeto de estudo; sem tuning extensivo) ───────
+# -- MLP baseline (not the object of study; no extensive tuning) -------
 MLP_HIDDEN: tuple[int, ...] = (8, 4)   # 4 -> 8 -> 4 -> 1
 
-# ── Treino (idêntico para VQC e MLP) ──────────────────────────────────
-N_EPOCHS: int = 100          # épocas completas (ver docstring do módulo)
+# -- training (identical for VQC and MLP) ------------------------------
+N_EPOCHS: int = 100
 BATCH_SIZE: int = 16
-LEARNING_RATE: float = 0.05  # Adam, mesmo para VQC e MLP
-CHECKPOINT_EVERY: int = 5    # épocas; é ARTEFATO do experimento, não resume
+LEARNING_RATE: float = 0.05
+CHECKPOINT_EVERY: int = 5    # epochs; checkpoints are an artifact, not resume
 
-# ── Split ─────────────────────────────────────────────────────────────
+# -- split -------------------------------------------------------------
 TRAIN_FRAC: float = 0.70
 VAL_FRAC: float = 0.15
 TEST_FRAC: float = 0.15
 
-# ── Encoding: MinMaxScaler para [0, pi], ajustado SÓ no treino ────────
-# StandardScaler é proibido: com RY(x), |x| > pi alia (dois pontos
-# distintos viram o mesmo estado).
+# -- encoding: MinMaxScaler to [0, pi], fit on the training split only --
+# StandardScaler is not an option: under RY(x), |x| > pi aliases two distinct
+# points onto the same state.
 FEATURE_RANGE: tuple[float, float] = (0.0, 3.141592653589793)
 
-# ── ucimlrepo ids (VERIFICADOS EM TEMPO DE CARGA, ver data.py) ───────
+# -- ucimlrepo ids (validated at load time, see data.py) ---------------
 UCI_IDS: dict[str, int] = {
-    "banknote": 267,       # Banknote Authentication
-    "blood": 176,          # Blood Transfusion Service Center
-    "mammographic": 161,   # Mammographic Mass
+    "banknote": 267,
+    "blood": 176,
+    "mammographic": 161,
 }
 
-# ── Diferenciação e amostragem ────────────────────────────────────────
-# PADRÃO DO PAPER: backprop + simulador analítico (shots=None).
-#
-# Não são variáveis do estudo — a variável independente é UMA, a profundidade.
-# Existem como CAPACIDADE, por dois motivos:
-#   * backprop foi VERIFICADO reproduzir parameter-shift a ~1e-16 (o gradiente
-#     é o mesmo), a uma fração do custo. Poder rodar os dois é o que sustenta
-#     essa afirmação na seção de método em vez de pedir fé ao revisor.
-#   * shots != None introduz ruído de amostragem, que é ciência DIFERENTE (não
-#     redundante) — fica pronto para a extensão, fora deste artigo.
-# Com shots != None o backprop deixa de ser válido: o gradiente passa a exigir
-# parameter-shift, e o custo sobe uma ordem de grandeza.
+# -- differentiation and sampling --------------------------------------
+# Paper default: backprop on the analytic simulator. Neither is a variable of
+# the study; both exist as a capability. backprop reproduces parameter-shift
+# gradients to ~1e-16 at a fraction of the cost, and being able to run both is
+# what backs that claim in the methods section. With shots != None backprop is
+# no longer valid and parameter-shift is required.
 DIFF_METHOD: str = "backprop"
 SHOTS: int | None = None
 
-# ── Métrica primária ──────────────────────────────────────────────────
+# -- primary metric ----------------------------------------------------
 PRIMARY_METRIC: str = "f1"
 
-# ── Layout de saída (raiz sempre vem de --outdir) ────────────────────
+# -- output layout (root always comes from --outdir) -------------------
 SUBDIRS: tuple[str, ...] = (
     "runs", "results", "predictions", "checkpoints", "figures", "tables", "logs",
 )
@@ -81,7 +67,7 @@ SUBDIRS: tuple[str, ...] = (
 
 @dataclass(frozen=True)
 class RunConfig:
-    """Configuração de UMA execução do grid."""
+    """Configuration of a single cell of the grid."""
     dataset: str
     model: str
     seed: int
@@ -95,13 +81,10 @@ class RunConfig:
 
     @property
     def run_id(self) -> str:
-        """Identificador canônico: banknote__vqc4__seed07.
-
-        Configuração NÃO-PADRÃO ganha sufixo. Isto não é cosmético: sem ele um
-        run com shots=1024 sobrescreveria o analítico de mesmo (dataset, model,
-        seed), e o CSV reconstruído misturaria silenciosamente dois
-        experimentos diferentes na mesma linha.
-        """
+        """Canonical identifier, e.g. banknote__vqc4__seed07. Non-default
+        configurations get a suffix: without it a shots=1024 run would overwrite
+        the analytic run with the same (dataset, model, seed) and the rebuilt
+        CSV would silently mix two experiments in one row."""
         rid = f"{self.dataset}__{self.model}__seed{self.seed:02d}"
         if self.is_quantum:
             if self.shots is not None:
@@ -111,10 +94,16 @@ class RunConfig:
         return rid
 
     def __post_init__(self):
+        if self.n_epochs < 1:
+            # With zero epochs there is no best epoch, and the record would be
+            # written with -inf / inf, which is not valid JSON.
+            raise ValueError(f"n_epochs must be >= 1, got {self.n_epochs}")
+        if self.batch_size < 1:
+            raise ValueError(f"batch_size must be >= 1, got {self.batch_size}")
         if self.shots is not None and self.diff_method == "backprop":
             raise ValueError(
-                "backprop não é válido com shots finitos (não há statevector "
-                "para diferenciar). Use --diff-method parameter-shift."
+                "backprop is invalid with finite shots (there is no statevector "
+                "to differentiate). Use --diff-method parameter-shift."
             )
 
     @property
@@ -127,10 +116,9 @@ class RunConfig:
 
 
 def n_parameters(model: str) -> int:
-    """Número de parâmetros treináveis de cada modelo."""
     if model in VQC_LAYERS:
         return VQC_LAYERS[model] * PARAMS_PER_LAYER
     if model == "mlp":
         dims = (4,) + MLP_HIDDEN + (1,)
         return sum(dims[i] * dims[i + 1] + dims[i + 1] for i in range(len(dims) - 1))
-    raise ValueError(f"modelo desconhecido: {model}")
+    raise ValueError(f"unknown model: {model}")

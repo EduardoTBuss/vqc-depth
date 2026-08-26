@@ -1,6 +1,6 @@
 """Child process used by the cross-process determinism tests.
 
-Prints ONLY a JSON object with the split fingerprints, so that a parent running
+Prints a single JSON object with the split fingerprints, so a parent running
 several children under different ``PYTHONHASHSEED`` values can compare them
 byte for byte.  Not collected by pytest (the file name does not start with
 ``test_``).
@@ -38,7 +38,7 @@ def main() -> int:
     payload = {
         "hashes": sp.hashes,
         "n_imputed": sp.n_imputed,
-        # a float fingerprint too: the hashes only cover the INDICES, and a
+        # Float fingerprint too: the hashes only cover the indices, so a
         # preprocessing difference between processes would slip past them.
         "X_train_sha": __import__("hashlib").sha256(
             np.ascontiguousarray(sp.X_train, dtype="<f8").tobytes()).hexdigest(),

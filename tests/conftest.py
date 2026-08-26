@@ -38,23 +38,23 @@ def cache_is_complete() -> bool:
 def uci_available() -> bool:
     """Skip UCI-backed tests unless the cache exists or downloads are allowed.
 
-    Rationale: this suite is the GATE of the Colab grid.  A flaky UCI mirror
-    must never be able to stop 120 runs from starting.  Set
-    ``VQCDEPTH_ALLOW_DOWNLOAD=1`` to let the tests populate the cache instead.
+    This suite gates the Colab grid, so a flaky UCI mirror must not be able to
+    stop 120 runs from starting.  Set ``VQCDEPTH_ALLOW_DOWNLOAD=1`` to let the
+    tests populate the cache instead.
     """
     if cache_is_complete():
         return True
     if os.environ.get("VQCDEPTH_ALLOW_DOWNLOAD") == "1":
         return True
     pytest.skip(
-        "data/cache incompleto e VQCDEPTH_ALLOW_DOWNLOAD != 1: "
-        "testes que dependem do UCI foram pulados"
+        "data/cache is incomplete and VQCDEPTH_ALLOW_DOWNLOAD != 1: "
+        "UCI-backed tests skipped"
     )
 
 
 @pytest.fixture
 def outdir(tmp_path: Path) -> Path:
-    """An isolated output root -- no test may ever write inside the repo."""
+    """Isolated output root; no test may write inside the repo."""
     from vqcdepth import storage
 
     return storage.ensure_layout(tmp_path / "out")

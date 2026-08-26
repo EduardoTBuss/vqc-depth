@@ -1,9 +1,8 @@
-"""Orquestrador do grid: decide o que falta, executa, persiste, retoma.
+"""Grid orchestration: decide what is missing, execute, persist, resume.
 
-Retomada e' POR RUN, nao por epoca. Runs sao curtos o bastante para que resume
-intra-run seja over-engineering; os checkpoints por epoca existem como
-ARTEFATO do experimento (curvas, analise de barren plateau), nao como
-mecanismo de recuperacao.
+Resume is PER RUN, not per epoch: runs are short enough that intra-run resume
+would be over-engineering. The per-epoch checkpoints are an artifact of the
+experiment (curves, barren-plateau inspection), not a recovery mechanism.
 """
 
 from __future__ import annotations
@@ -25,11 +24,11 @@ from . import config, storage
 from .config import RunConfig
 
 
-# -- metricas ---------------------------------------------------------
+# -- metrics ----------------------------------------------------------
 
 def classification_metrics(y_true: np.ndarray, y_prob: np.ndarray,
                            threshold: float = 0.5) -> dict:
-    """Bateria completa. TN/FP/FN/TP saem como NUMEROS - a figura se recria."""
+    """Full battery. TN/FP/FN/TP come out as numbers so plots can be redrawn."""
     y_true = np.asarray(y_true).astype(int)
     y_prob = np.clip(np.asarray(y_prob, dtype=np.float64), 1e-12, 1 - 1e-12)
     y_pred = (y_prob >= threshold).astype(int)
@@ -37,8 +36,8 @@ def classification_metrics(y_true: np.ndarray, y_prob: np.ndarray,
     tn, fp, fn, tp = confusion_matrix(y_true, y_pred, labels=[0, 1]).ravel()
     specificity = tn / (tn + fp) if (tn + fp) > 0 else float("nan")
 
-    # AUC exige as duas classes presentes; com 15% de teste num dataset
-    # desbalanceado isso pode falhar, e falhar em silencio seria pior.
+    # AUC needs both classes present; with a 15% test split on an imbalanced
+    # dataset that can fail, and failing silently would be worse.
     try:
         roc = float(roc_auc_score(y_true, y_prob))
     except ValueError:
@@ -62,7 +61,7 @@ def classification_metrics(y_true: np.ndarray, y_prob: np.ndarray,
     }
 
 
-# -- selecao do que falta ---------------------------------------------
+# -- selecting what is missing ----------------------------------------
 
 def build_grid(datasets: Sequence[str] | None = None,
                models: Sequence[str] | None = None,
@@ -73,24 +72,24 @@ def build_grid(datasets: Sequence[str] | None = None,
     sd = tuple(seeds) if seeds is not None else config.SEEDS
     for d in ds:
         if d not in config.DATASETS:
-            raise ValueError(f"dataset desconhecido: {d} (use {config.DATASETS})")
+            raise ValueError(f"unknown dataset: {d} (use {config.DATASETS})")
     for m in md:
         if m not in config.MODELS:
-            raise ValueError(f"modelo desconhecido: {m} (use {config.MODELS})")
+            raise ValueError(f"unknown model: {m} (use {config.MODELS})")
     return [RunConfig(dataset=d, model=m, seed=int(s), **run_kwargs)
             for d in ds for s in sd for m in md]
 
 
 def pending(grid: Iterable[RunConfig], outdir) -> list[RunConfig]:
-    """O que ainda falta. E' isto que torna a sessao do Colab retomavel."""
+    """What is still missing: this is what makes a Colab session resumable."""
     return [c for c in grid if not storage.run_exists(outdir, c.run_id)]
 
 
-# -- execucao de UM run -----------------------------------------------
+# -- executing a single run -------------------------------------------
 
 def execute_run(cfg: RunConfig, outdir) -> dict:
-    """Treina, avalia no teste UMA vez, persiste tudo. Devolve o registro."""
-    # imports tardios: manter o CLI leve e o --part rebuild sem PennyLane
+    """Train, evaluate on test ONCE, persist everything, return the record."""
+    # Late imports keep the CLI light and let --part rebuild run without PennyLane.
     from .splits import make_split
     from .train import train_model
 
@@ -99,7 +98,8 @@ def execute_run(cfg: RunConfig, outdir) -> dict:
     ckpt_dir = storage.checkpoint_dir(outdir, cfg.run_id) if cfg.save_checkpoints else None
     out = train_model(cfg, split, checkpoint_dir=ckpt_dir)
 
-    # O teste e' tocado AQUI e so aqui, com os pesos da melhor epoca de VALIDACAO.
+    # The test split is touched here and nowhere else, with the weights of the
+    # best VALIDATION epoch.
     y_prob, inference_time = _predict_test(cfg, out, split)
     test = classification_metrics(split.y_test, y_prob)
 
@@ -145,9 +145,9 @@ def _predict_test(cfg: RunConfig, out, split) -> tuple[np.ndarray, float]:
     t0 = time.perf_counter()
     if cfg.is_quantum:
         from .circuits import make_qnode, predict_proba
-        # Inferência SEMPRE analítica, mesmo quando o TREINO usou shots: o que
-        # se estuda com shots é o efeito do ruído na OTIMIZAÇÃO, e medir o teste
-        # com ruído misturaria os dois efeitos numa métrica só.
+        # Inference is always analytic, even when training used finite shots:
+        # what shots probe is the effect of noise on OPTIMIZATION, and measuring
+        # the test split with noise would mix both effects into one metric.
         qnode = make_qnode(cfg.n_layers, diff_method="backprop", shots=None)
         y_prob = predict_proba(qnode, out.best_params, split.X_test)
     else:
@@ -157,7 +157,7 @@ def _predict_test(cfg: RunConfig, out, split) -> tuple[np.ndarray, float]:
 
 
 def _persist(cfg, outdir, record, out, split, y_prob) -> None:
-    """Historico completo + predicoes + registro. Registro por ULTIMO."""
+    """Full history + predictions + record, with the record written LAST."""
     hist = pd.DataFrame([vars(e) if hasattr(e, "__dict__") else dict(e)
                          for e in out.history])
     hist.insert(0, "model", cfg.model)
@@ -166,8 +166,8 @@ def _persist(cfg, outdir, record, out, split, y_prob) -> None:
     storage.atomic_write_text(storage.history_path(outdir, cfg.run_id),
                               hist.to_csv(index=False))
 
-    # dataset/model/seed vao COMO COLUNAS, alem de estarem no nome do arquivo:
-    # depender so do nome torna a leitura fragil a qualquer renomeacao.
+    # dataset/model/seed are stored as COLUMNS as well as in the file name:
+    # relying on the name alone makes reading fragile to any renaming.
     preds = pd.DataFrame({
         "dataset": cfg.dataset,
         "model": cfg.model,
@@ -179,32 +179,32 @@ def _persist(cfg, outdir, record, out, split, y_prob) -> None:
     })
     _write_predictions(storage.predictions_path(outdir, cfg.run_id), preds)
 
-    # o JSON do run e' o marcador de "feito": so depois de tudo o mais no disco
+    # The run JSON is the "done" marker, so it lands only after everything else.
     storage.atomic_write_json(storage.run_path(outdir, cfg.run_id), record)
 
 
 def _write_predictions(path: Path, df: pd.DataFrame) -> None:
-    """Parquet se houver engine; senao CSV - nao vale perder o run por isso."""
+    """Parquet when an engine is available, CSV otherwise: never lose a run."""
     import io
     try:
         buf = io.BytesIO()
         df.to_parquet(buf, index=False)
         storage.atomic_write_bytes(path, buf.getvalue())
     except (ImportError, ValueError) as e:
-        print(f"  [aviso] parquet indisponivel ({e}); gravando CSV")
+        print(f"  [warning] parquet unavailable ({e}); writing CSV instead")
         storage.atomic_write_text(path.with_suffix(".csv"), df.to_csv(index=False))
 
 
-# -- laco do grid -----------------------------------------------------
+# -- grid loop --------------------------------------------------------
 
 def run_grid(grid: Sequence[RunConfig], outdir, stop_on_error: bool = False) -> dict:
-    """Executa o que falta, um run por vez, persistindo a cada conclusao."""
+    """Run what is missing, one run at a time, persisting on each completion."""
     storage.ensure_layout(outdir)
     storage.write_env_json(outdir)
 
     todo = pending(grid, outdir)
     done = len(grid) - len(todo)
-    print(f"\n  grid: {len(grid)} runs | ja no disco: {done} | a executar: {len(todo)}")
+    print(f"\n  grid: {len(grid)} runs | on disk: {done} | to run: {len(todo)}")
 
     ok, failed = 0, []
     for i, cfg in enumerate(todo, 1):
@@ -217,15 +217,15 @@ def run_grid(grid: Sequence[RunConfig], outdir, stop_on_error: bool = False) -> 
                 rec["test_f1"], rec["test_accuracy"], rec["best_epoch"],
                 time.time() - t0), flush=True)
         except KeyboardInterrupt:
-            print("\n  interrompido pelo usuario; o que terminou esta no disco.")
+            print("\n  interrupted by the user; whatever finished is on disk.")
             break
         except Exception as e:
             failed.append((cfg.run_id, repr(e)))
-            print(f"      FALHOU: {e}")
+            print(f"      FAILED: {e}")
             traceback.print_exc()
             if stop_on_error:
                 raise
-    print(f"\n  concluidos nesta sessao: {ok} | falhas: {len(failed)}")
+    print(f"\n  completed in this session: {ok} | failures: {len(failed)}")
     for rid, err in failed:
         print(f"    - {rid}: {err}")
     return {"executed": ok, "failed": failed, "pending_before": len(todo)}

@@ -1,14 +1,10 @@
 """Capability tests for --diff-method and --shots.
 
-SCOPE NOTE, on purpose: neither of these is a variable of the study.  The grid
-in the paper runs with backprop on an analytic simulator, and the independent
-variable is ONE -- circuit depth.  These knobs exist so that
-
-  * the methodological claim "backprop reproduces parameter-shift" is something
-    a reviewer can re-run instead of taking on faith, and
-  * the shot-noise extension is one flag away, outside this paper.
-
-The tests below therefore guard the *plumbing*, not a scientific result.
+Neither knob is a variable of the study: the grid runs with backprop on an
+analytic simulator and the single independent variable is circuit depth.  They
+exist so that the methodological claim "backprop reproduces parameter-shift" is
+re-runnable by a reviewer, and so the shot-noise extension is one flag away.
+These tests therefore guard the plumbing, not a scientific result.
 """
 
 from __future__ import annotations
@@ -29,15 +25,15 @@ def _bce(p, y):
     return -pnp.mean(y * pnp.log(p) + (1 - y) * pnp.log(1 - p))
 
 
-# ---------------------------------------------------------------- gradients
+# --- gradients ---
 
 @pytest.mark.parametrize("n_layers", [1, 2, 4])
 def test_backprop_and_parameter_shift_give_the_same_gradient(n_layers):
-    """THE claim the paper makes. If this drifts, the justification is void.
+    """The claim the paper makes; if this drifts, the justification is void.
 
-    Measured on 2026-08-25: max abs difference ~1e-16, i.e. float64 noise.
+    Maximum absolute difference measured at ~1e-16, i.e. float64 noise.
     """
-    rng = np.random.default_rng(20260825)
+    rng = np.random.default_rng(1234)
     Xb = rng.uniform(0.0, np.pi, (16, config.N_QUBITS))
     y = pnp.array(rng.integers(0, 2, 16).astype(float), requires_grad=False)
     w0 = rng.uniform(-np.pi, np.pi, circuits.weights_shape(n_layers))
@@ -59,7 +55,7 @@ def test_backprop_and_parameter_shift_give_the_same_gradient(n_layers):
     )
 
 
-# -------------------------------------------------------------------- shots
+# --- shots ---
 
 def test_finite_shots_are_stochastic_and_analytic_is_not():
     """Sanity: shots actually sample. Two analytic calls must be identical."""
@@ -90,10 +86,10 @@ def test_more_shots_converge_toward_the_analytic_value():
     )
 
 
-# ------------------------------------------------------- guards and run ids
+# --- guards and run ids ---
 
 def test_backprop_with_shots_is_rejected_early():
-    """There is no statevector to differentiate -- fail loudly, not silently."""
+    """There is no statevector to differentiate: fail loudly, not silently."""
     with pytest.raises(ValueError, match="backprop"):
         circuits.make_qnode(1, diff_method="backprop", shots=100)
     with pytest.raises(ValueError, match="backprop"):
@@ -101,7 +97,7 @@ def test_backprop_with_shots_is_rejected_early():
 
 
 def test_non_default_runs_get_a_distinct_run_id():
-    """THE data-integrity guard.
+    """Data-integrity guard.
 
     Without the suffix, a shots run would overwrite the analytic run of the
     same (dataset, model, seed) and the rebuilt CSV would silently mix two
