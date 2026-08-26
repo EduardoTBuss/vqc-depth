@@ -195,7 +195,11 @@ class _QuantumEngine:
 
     def __init__(self, cfg):
         self.n_layers = cfg.n_layers
-        self.circuit = circuits.make_qnode(self.n_layers)
+        self.circuit = circuits.make_qnode(
+            self.n_layers,
+            diff_method=getattr(cfg, "diff_method", None),
+            shots=getattr(cfg, "shots", None),
+        )
         rng = init_rng(cfg.dataset, cfg.model, cfg.seed)
         self.params = circuits.init_weights(self.n_layers, rng)
         self.opt = qml.AdamOptimizer(

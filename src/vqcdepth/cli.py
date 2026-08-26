@@ -43,6 +43,15 @@ def build_parser() -> argparse.ArgumentParser:
                    help="epocas COMPLETAS de treino (1 epoca = varredura inteira)")
     p.add_argument("--batch-size", type=int, default=config.BATCH_SIZE)
     p.add_argument("--lr", type=float, default=config.LEARNING_RATE)
+    p.add_argument("--diff-method", default=config.DIFF_METHOD,
+                   choices=["backprop", "parameter-shift"],
+                   help="método de gradiente. NÃO é variável do estudo: o grid "
+                        "do artigo usa backprop, verificado idêntico a "
+                        "parameter-shift a ~1e-16 e ~10x mais barato")
+    p.add_argument("--shots", type=int, default=config.SHOTS,
+                   help="amostras por medição (padrão: analítico, sem ruído). "
+                        "Fora do escopo do artigo; exige --diff-method "
+                        "parameter-shift e multiplica o custo")
     p.add_argument("--no-checkpoint", action="store_true",
                    help="nao gravar checkpoints por epoca (o resume e' por RUN, "
                         "entao isto nao afeta a retomada)")
@@ -77,7 +86,13 @@ def main(argv: list[str] | None = None) -> int:
         datasets=args.datasets, models=args.models, seeds=args.seeds,
         n_epochs=args.epochs, batch_size=args.batch_size,
         learning_rate=args.lr, save_checkpoints=not args.no_checkpoint,
+        diff_method=args.diff_method, shots=args.shots,
     )
+    if args.shots is not None or args.diff_method != config.DIFF_METHOD:
+        print(f"\n  [atenção] configuração FORA do desenho do artigo: "
+              f"diff_method={args.diff_method} shots={args.shots}. "
+              f"Os run_id levam sufixo, então estes resultados NÃO "
+              f"sobrescrevem o grid analítico.")
 
     if args.part == "status" or args.dry_run:
         _print_status(grid, outdir)

@@ -129,6 +129,8 @@ def execute_run(cfg: RunConfig, outdir) -> dict:
         "n_epochs_configured": cfg.n_epochs,
         "batch_size": cfg.batch_size,
         "learning_rate": cfg.learning_rate,
+        "diff_method": cfg.diff_method if cfg.is_quantum else None,
+        "shots": cfg.shots if cfg.is_quantum else None,
         "status": "completed",
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
     }
@@ -143,7 +145,11 @@ def _predict_test(cfg: RunConfig, out, split) -> tuple[np.ndarray, float]:
     t0 = time.perf_counter()
     if cfg.is_quantum:
         from .circuits import make_qnode, predict_proba
-        y_prob = predict_proba(make_qnode(cfg.n_layers), out.best_params, split.X_test)
+        # Inferência SEMPRE analítica, mesmo quando o TREINO usou shots: o que
+        # se estuda com shots é o efeito do ruído na OTIMIZAÇÃO, e medir o teste
+        # com ruído misturaria os dois efeitos numa métrica só.
+        qnode = make_qnode(cfg.n_layers, diff_method="backprop", shots=None)
+        y_prob = predict_proba(qnode, out.best_params, split.X_test)
     else:
         from .models import predict_proba_mlp
         y_prob = predict_proba_mlp(out.best_params, split.X_test)

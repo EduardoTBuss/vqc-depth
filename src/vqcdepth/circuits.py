@@ -101,7 +101,8 @@ def n_parameters(n_layers: int) -> int:
     return int(np.prod(weights_shape(n_layers)))
 
 
-def make_qnode(n_layers: int, device: object | None = None):
+def make_qnode(n_layers: int, device: object | None = None,
+               diff_method: str | None = None, shots: int | None = None):
     """Build the QNode for a circuit with ``n_layers`` variational layers.
 
     The returned callable has signature ``circuit(inputs, weights)`` where
@@ -112,11 +113,17 @@ def make_qnode(n_layers: int, device: object | None = None):
     if int(n_layers) < 1:
         raise ValueError(f"n_layers must be >= 1, got {n_layers}")
     n_layers = int(n_layers)
+    diff_method = config.DIFF_METHOD if diff_method is None else diff_method
+    if shots is not None and diff_method == "backprop":
+        raise ValueError(
+            "backprop is invalid with finite shots: there is no statevector to "
+            "differentiate. Use diff_method='parameter-shift'."
+        )
     dev = device if device is not None else qml.device(
-        "default.qubit", wires=config.N_QUBITS, shots=None
+        "default.qubit", wires=config.N_QUBITS
     )
 
-    @qml.qnode(dev, interface="autograd", diff_method="backprop")
+    @qml.qnode(dev, interface="autograd", diff_method=diff_method)
     def circuit(inputs, weights):
         # --- encoding: angle encoding, applied exactly once -------------
         # inputs[..., j] keeps the leading broadcast axis (if any) intact.
@@ -133,7 +140,16 @@ def make_qnode(n_layers: int, device: object | None = None):
                 qml.CNOT(wires=[j, j - 1])
         return qml.expval(qml.PauliZ(0))
 
+    # qml.set_shots is the supported way since PL 0.44; passing shots= to the
+    # device is deprecated and warns.  shots=None keeps the analytic path.
+    if shots is not None:
+        circuit = qml.set_shots(circuit, shots=int(shots))
+
     circuit.n_layers = n_layers
+    # NB: 'shots' and 'diff_method' are reserved attributes on a QNode -- the
+    # underscore names are ours, for introspection in tests and logs.
+    circuit._vqcdepth_diff_method = diff_method
+    circuit._vqcdepth_shots = shots
     return circuit
 
 

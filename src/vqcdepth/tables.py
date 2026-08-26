@@ -28,7 +28,8 @@ RAW_COLUMNS = [
     "TN", "FP", "FN", "TP",
     "training_time_seconds", "inference_time_seconds", "wall_time_seconds",
     "split_hash_train", "split_hash_val", "split_hash_test", "split_hash_all",
-    "n_epochs_configured", "batch_size", "learning_rate", "status", "timestamp",
+    "n_epochs_configured", "batch_size", "learning_rate",
+    "diff_method", "shots", "status", "timestamp",
 ]
 
 MODEL_ORDER = list(config.MODELS)

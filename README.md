@@ -214,6 +214,46 @@ Guarde-o nos **Colab Secrets** com o nome `GH_PAT` (ícone de chave na barra
 lateral) e libere *Notebook access*. **Nunca** digite o token numa célula,
 nunca o imprima, nunca o commite.
 
+## Fora do escopo do artigo: `--diff-method` e `--shots`
+
+Existem como **capacidade**, não como variável do estudo. O grid publicado roda
+com **backprop** num **simulador analítico**, e a variável independente é uma
+só: a profundidade.
+
+```bash
+# reproduz a afirmação de método (mesmo gradiente, ~10x mais caro)
+python -m vqcdepth --part train --outdir ./out --diff-method parameter-shift
+
+# extensão com ruído de amostragem (exige parameter-shift)
+python -m vqcdepth --part train --outdir ./out     --diff-method parameter-shift --shots 1024
+```
+
+**Por que o artigo usa backprop.** Num simulador ideal os dois métodos devolvem
+*o mesmo* gradiente — medido, diferença máxima **~1e-16**, que é ruído de
+float64 — a uma fração do custo:
+
+| | backprop | parameter-shift |
+|---|---:|---:|
+| execuções de circuito por passo (batch 16, L=1) | **16** | 272 |
+| idem, L=4 | **16** | 1040 |
+| tempo por passo, L=4 | **33,8 ms** | 356,1 ms (10,5×) |
+| **grid completo** | **~82 min** | ~11,6 h local / ~20 h no Colab |
+
+O parameter-shift é **obrigatório em hardware real**, onde não existe
+statevector para diferenciar — só medições. Este repositório roda em simulador,
+então backprop é correto *e* barato. `tests/test_diffmethod_shots.py` mantém a
+equivalência sob teste: se ela deixar de valer, a justificativa cai junto.
+
+**Integridade dos dados:** configurações não-padrão recebem sufixo no `run_id`
+(`banknote__vqc4__seed07__shots1024__parametershift`). Sem isso, um run com
+shots sobrescreveria o analítico de mesmo `(dataset, model, seed)` e o CSV
+reconstruído misturaria dois experimentos na mesma linha. `backprop` com shots
+finitos é **rejeitado na construção**, não em silêncio.
+
+A **inferência no teste é sempre analítica**, mesmo quando o treino usou shots:
+o que a extensão estuda é o efeito do ruído sobre a *otimização*; medir o teste
+com ruído misturaria os dois efeitos numa métrica só.
+
 ## Persistência e retomada
 
 - **Um arquivo por execução**, id `dataset__model__seedNN`
