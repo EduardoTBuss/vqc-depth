@@ -87,6 +87,18 @@ after cloning so the token is not left in `.git/config`.
 If the clone fails, the message is deliberately generic: check the PAT, the
 `Contents: Read` scope and the repository name.
 
+**If the secret is missing**, the cell prints the step-by-step fix and then
+offers a hidden one-off prompt, so a session can proceed without leaving the
+notebook to go and create the secret. A token pasted at that prompt is used for
+the clone and discarded in the same cell; it is not stored anywhere. Pressing
+Enter on the empty prompt stops cleanly.
+
+The secret is read *outside* the `except` block on purpose. Raising `SystemExit`
+from inside an exception handler chains the two exceptions, and IPython's
+traceback formatter crashes on that chain with
+`TypeError: object of type 'NoneType' has no len()` in `find_recursion` — which
+hides the one message that says what to do. Keep the raise out of the handler.
+
 ## Cell 3 — dependencies
 
 `pip install -r requirements.txt` and `pip install -e .`.

@@ -67,27 +67,64 @@ token. The remote is rewritten right after cloning so the token is not left in
 `.git/config`.
 """),
 code("""
-from google.colab import userdata
-import subprocess
+import getpass, subprocess
 
 GH_USER, REPO = 'EduardoTBuss', 'vqc-depth'
 
+# The secret is read OUTSIDE the except block on purpose. Raising SystemExit
+# from inside a handler chains the exceptions, and IPython's traceback
+# formatter crashes on that chain with a TypeError in find_recursion, which
+# buries the only message that actually tells you what to do.
+_pat, _why = None, ''
 try:
+    from google.colab import userdata
     _pat = userdata.get('GH_PAT')
 except Exception as e:
-    raise SystemExit(
-        'Secret GH_PAT is missing. Create it under the key icon with '
-        f'Contents: Read-only and grant this notebook access. ({e})')
+    _why = f'{type(e).__name__}: {e}'
+
+if not _pat:
+    print('=' * 72)
+    print('The Colab secret GH_PAT is not available.')
+    if _why:
+        print(_why)
+    print('')
+    print('Preferred fix, done once per Google account (about a minute):')
+    print('  1. key icon in the left sidebar  ->  + Add new secret')
+    print('  2. Name: GH_PAT   (exactly this, case sensitive)')
+    print('  3. Value: a GitHub fine-grained PAT scoped to the vqc-depth repo,')
+    print('     Repository permissions -> Contents: Read-only. Create one at')
+    print('     https://github.com/settings/personal-access-tokens/new')
+    print('  4. turn "Notebook access" ON for this notebook')
+    print('  5. re-run this cell')
+    print('')
+    print('Or paste the token once, right now, to keep going without the')
+    print('secret. It is hidden while typing and never stored or printed.')
+    print('Press Enter on an empty prompt to stop instead.')
+    print('=' * 72)
+    try:
+        _pat = getpass.getpass('GH_PAT (hidden): ').strip()
+    except Exception:
+        _pat = None
+
+if not _pat:
+    print('')
+    print('No token available, so nothing was cloned. Set the secret as')
+    print('described above and re-run this cell.')
+    raise SystemExit
 
 !rm -rf /content/{REPO}
 _url = f'https://{GH_USER}:{_pat}@github.com/{GH_USER}/{REPO}.git'
 r = subprocess.run(['git', 'clone', '--quiet', _url, f'/content/{REPO}'],
                    capture_output=True, text=True)
-if r.returncode != 0:
-    raise SystemExit('git clone failed (message suppressed: it contains the '
-                     'token). Check the PAT, the Contents:Read scope and the '
-                     'repository name.')
 del _pat, _url
+if r.returncode != 0:
+    print('git clone failed. The real message is suppressed because git echoes')
+    print('the URL, and the URL carries the token. Check, in this order:')
+    print('  - the token has not expired')
+    print('  - Repository access covers EduardoTBuss/vqc-depth specifically')
+    print('  - Repository permissions -> Contents is at least Read-only')
+    print('  - the repository name is still vqc-depth')
+    raise SystemExit
 
 %cd /content/{REPO}
 !git remote set-url origin https://github.com/{GH_USER}/{REPO}.git
