@@ -182,6 +182,22 @@ def test_env_json_records_versions_and_the_frozen_hyperparameters(outdir):
     assert hp["split"] == [config.TRAIN_FRAC, config.VAL_FRAC, config.TEST_FRAC]
 
 
+def test_env_json_records_cli_overrides_from_the_selected_grid(outdir):
+    run = config.RunConfig(
+        dataset="blood", model="mlp", seed=4,
+        n_epochs=17, batch_size=8, learning_rate=0.001,
+    )
+    env = storage.write_env_json(outdir, [run])
+
+    assert env["hyperparams"]["n_epochs"] == 17
+    assert env["hyperparams"]["batch_size"] == 8
+    assert env["hyperparams"]["learning_rate"] == 0.001
+    assert env["hyperparams"]["seeds"] == [4]
+    assert env["selected_grid"] == {
+        "run_count": 1, "datasets": ["blood"], "models": ["mlp"],
+    }
+
+
 def test_nothing_here_writes_inside_the_repository(outdir):
     """Guard for the guard: every path used above lives under tmp_path."""
     repo_root = Path(__file__).resolve().parents[1]

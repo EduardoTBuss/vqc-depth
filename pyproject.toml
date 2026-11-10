@@ -7,8 +7,8 @@ name = "vqcdepth"
 version = "0.1.0"
 description = "Controlled empirical study of circuit depth in variational quantum classifiers"
 readme = "README.md"
-requires-python = ">=3.10"
-authors = [{ name = "Eduardo Timm Buss", email = "eduardotimmbus@gmail.com" }]
+requires-python = ">=3.11"
+authors = [{ name = "Eduardo Timm Buss" }]
 license = { text = "MIT" }
 keywords = ["quantum-machine-learning", "variational-quantum-classifier",
             "pennylane", "quantum-computing", "reproducible-research"]

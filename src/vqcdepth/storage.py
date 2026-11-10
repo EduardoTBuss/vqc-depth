@@ -131,8 +131,13 @@ def iter_runs(outdir) -> Iterator[dict]:
         yield rec
 
 
-def write_env_json(outdir) -> dict:
-    """Versions and hardware of the session: the input to the repro section."""
+def write_env_json(outdir, grid=None) -> dict:
+    """Versions, hardware and actual selected grid for reproducibility.
+
+    CLI overrides must be recorded instead of silently falling back to module
+    defaults. The grid remains optional for callers that only want the frozen
+    paper defaults.
+    """
     import importlib.metadata as md
     import platform
     import sys
@@ -145,6 +150,14 @@ def write_env_json(outdir) -> dict:
             pkgs[p] = md.version(p)
         except Exception:
             pkgs[p] = None
+
+    selected = tuple(grid or ())
+
+    def selected_value(field: str, default):
+        values = sorted({getattr(run, field) for run in selected})
+        if not values:
+            return default
+        return values[0] if len(values) == 1 else values
 
     env = {
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
@@ -159,13 +172,18 @@ def write_env_json(outdir) -> dict:
             "n_qubits": config.N_QUBITS,
             "vqc_layers": config.VQC_LAYERS,
             "mlp_hidden": list(config.MLP_HIDDEN),
-            "n_epochs": config.N_EPOCHS,
-            "batch_size": config.BATCH_SIZE,
-            "learning_rate": config.LEARNING_RATE,
-            "seeds": list(config.SEEDS),
+            "n_epochs": selected_value("n_epochs", config.N_EPOCHS),
+            "batch_size": selected_value("batch_size", config.BATCH_SIZE),
+            "learning_rate": selected_value("learning_rate", config.LEARNING_RATE),
+            "seeds": sorted({run.seed for run in selected}) if selected else list(config.SEEDS),
             "split": [config.TRAIN_FRAC, config.VAL_FRAC, config.TEST_FRAC],
             "feature_range": list(config.FEATURE_RANGE),
         },
+        "selected_grid": {
+            "run_count": len(selected),
+            "datasets": sorted({run.dataset for run in selected}),
+            "models": sorted({run.model for run in selected}),
+        } if selected else None,
     }
     atomic_write_json(Path(outdir) / "env.json", env)
     return env

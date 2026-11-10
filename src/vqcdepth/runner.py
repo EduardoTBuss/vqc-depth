@@ -200,7 +200,7 @@ def _write_predictions(path: Path, df: pd.DataFrame) -> None:
 def run_grid(grid: Sequence[RunConfig], outdir, stop_on_error: bool = False) -> dict:
     """Run what is missing, one run at a time, persisting on each completion."""
     storage.ensure_layout(outdir)
-    storage.write_env_json(outdir)
+    storage.write_env_json(outdir, grid)
 
     todo = pending(grid, outdir)
     done = len(grid) - len(todo)

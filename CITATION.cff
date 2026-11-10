@@ -1,0 +1,9 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata below."
+type: software
+title: "VQC Depth"
+authors:
+  - family-names: "Buss"
+    given-names: "Eduardo Timm"
+repository-code: "https://github.com/EduardoTBuss/vqc-depth"
+license: MIT

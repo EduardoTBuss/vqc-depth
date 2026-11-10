@@ -1,292 +1,119 @@
-# vqc-depth — Does Deeper Mean Better in Variational Quantum Classifiers?
+# VQC Depth
 
-A controlled empirical study with **one independent variable: circuit depth**.
-Variational quantum classifiers of **1, 2 and 4 layers** are compared against a
-small classical MLP across **3 UCI datasets** and **10 seeds** — 120 runs — with
-every model receiving literally the same data splits, and seed-paired
-significance testing.
+Reproduction code and per-run metrics for **Circuit Depth in Variational Quantum
+Classifiers: Performance, Stability, and a Classical MLP Baseline**, accepted at
+[ERAMIA-RS 2026](https://eramia-rs.sbc.org.br/2026/).
 
-Research code for a short paper submitted to **ERAMIA-RS 2026**.
-Author: Eduardo T. Buss.
+The study compares four-qubit variational quantum classifiers (VQCs) with 1, 2,
+and 4 trainable layers against a classical multilayer perceptron (MLP). The
+main experiment covers three UCI datasets, four models, and ten seeds for a
+total of **120 runs**. An additional **30 runs** examine the MLP's sensitivity
+to the learning rate.
 
-This repository contains **code only**: no downloaded data, no results and no
-figures are versioned here — everything under `--outdir` is generated, and
-reproducing it is a matter of running the grid.
+[Paper and results](paper/) · [Run on Colab](COLAB.md) · [Cite the software](CITATION.cff) · [MIT License](LICENSE)
 
-The manuscript is not here either, and [`paper/`](paper/) is empty on purpose:
-the venue is **double-blind**, so while the paper is under review it neither
-links this repository nor names its author, and the repository stays private.
-The camera-ready PDF lands in `paper/` after acceptance — the checklist for
-going public is in [`paper/README.md`](paper/README.md).
+## Quick start
 
-## The experiment
+Use Python 3.11 or later and a CPU. The main study used Python 3.13 with
+PennyLane 0.44.1, PyTorch 2.11.0, and scikit-learn 1.7.0. The first run
+downloads the requested dataset from UCI and caches it under `data/cache/`.
 
-| axis | values |
-|---|---|
-| Depth | VQC-1 · VQC-2 · VQC-4 (**the only thing that varies**) |
-| Baseline | classical MLP `4 → 8 → 4 → 1`, ReLU, sigmoid |
-| Datasets | Banknote (UCI 267) · Blood Transfusion (UCI 176) · Mammographic Mass (UCI 161) |
-| Seeds | `range(10)` |
-| Qubits | 4 — one per feature, no dimensionality reduction |
-| Encoding | angle encoding, `x_j → RY(x_j)`, applied once |
-| Layer | `RZ(θ) → RY(θ)` per wire, then a CNOT chain `3→2→1→0` |
-| Readout | `⟨Z₀⟩ → p(y=1) = (1 + ⟨Z⟩)/2` |
-| Loss / optimiser | BCE / Adam — **identical for quantum and classical** |
-| Epochs / batch | 100 / 16 |
-| Simulator | `default.qubit`, analytic statevector, no shot noise |
-
-**Primary metric: F1.** Total: 3 × 4 × 10 = **120 runs**, about 82 minutes of
-CPU locally.
-
-## Research questions
-
-| | |
-|---|---|
-| **RQ1** | How does circuit depth affect predictive performance? |
-| **RQ2** | How does depth affect training stability and convergence across seeds? |
-| **RQ3** | How do VQCs of different depths compare with a classical MLP under the same low-dimensional input? |
-
-**Hypothesis, registered before any run:** added depth may increase
-representational capacity, but gains are expected to **saturate or regress** as
-optimisation becomes harder.
-
-This is **not** a claim of quantum advantage, not a new technique, and not an
-attempt to tune the MLP.
-
-## Datasets — four native features, no PCA
-
-No dimensionality reduction anywhere: each dataset already has, or is reduced by
-justified removal to, exactly four features — one per qubit. This removes PCA as
-a confounder.
-
-| name | UCI id | n | features | role |
-|---|---:|---:|---|---|
-| `banknote` | 267 | 1372 | variance, skewness, curtosis, entropy | easy and clean; a sanity floor |
-| `blood` | 176 | 748 | Recency, Frequency, Monetary, Time | hard, imbalanced (23.8% positive) |
-| `mammographic` | 161 | 961 | Age, Shape, Margin, Density | clinical, medium, has missing values |
-
-Two properties worth stating explicitly, both verified numerically:
-
-- **`blood` has four nominal features but only three informative ones.**
-  `Monetary = 250 × Frequency` holds exactly (bitwise, `max|M − 250F| = 0`) and
-  the feature matrix has **rank 3**. One qubit therefore encodes a rescaled copy
-  of another feature.
-- **`mammographic` drops BI-RADS**, which is a radiologist's *assessment*
-  rather than a measurement; keeping it would leak the label by proxy. The
-  remaining features carry **160 missing values** across 130 rows, imputed with
-  the **training-set median**.
-
-## The ansatz
-
-The variational layer is `RZ(θ) → RY(θ)` on every wire, followed by a CNOT
-chain running **toward the readout wire** (`3→2→1→0`), repeated 1, 2 or 4 times.
-Both choices exist so that **every parameter counts**.
-
-Pulling the readout back through the final entangling block decides which angles
-are inert. The pullback is always **diagonal** (a product of Pauli-Z), so the
-rotation sitting last in a layer must not commute with Z — `RZ` does, hence it
-goes first. And a CNOT *ring* would give `U†Z₀U = Z₁Z₂Z₃`, the identity on wire
-0, silently killing that wire's last-layer rotations; the chain gives
-`Z₀Z₁Z₂Z₃`, which acts on all four wires.
-
-Effective angle counts, obtained by perturbing each angle and counting those
-that move the output:
-
-| ansatz | L=1 | L=2 | L=4 |
-|---|---|---|---|
-| `RY,RZ` + ring | 3/8 | 11/16 | 27/32 |
-| `RZ,RY` + ring | 6/8 | 14/16 | 30/32 |
-| `RY` only + chain | 4/4 | 8/8 | 16/16 |
-| **`RZ,RY` + chain** (used here) | **8/8** | **16/16** | **32/32** |
-
-The chosen ansatz is the only variant where nominal equals effective at every
-depth. That matters for three reasons: the parameter counts reported in the
-paper are honest; the progression is exactly 1:2:4, so no depth is handicapped
-by a degenerate final layer; and keeping two rotations per wire leaves the state
-free of the real-amplitude restriction an `RY`-only ansatz would impose.
-
-`tests/test_ansatz.py` pins these numbers, so changing the layer template fails
-loudly instead of silently moving every result.
-
-## Fair comparison protocol
-
-For each `(dataset, seed)`:
-
-1. a single stratified **70/15/15** split;
-2. imputer and scaler fitted on the **training set only**, then applied to
-   validation and test;
-3. **the same indices reused by all four models**.
-
-The split is a function of `(dataset, seed)` alone — never of the model. Every
-run records the **SHA-256 hash** of its train/validation/test indices, and a
-test fails if two models of the same `(dataset, seed)` disagree, including
-across separate processes and sessions. This is what makes the **seed-paired
-Wilcoxon** legitimate rather than decorative.
-
-**Model selection uses the validation set. The test set is touched once**, at
-the end, with the weights chosen on validation.
-
-Features are scaled with `MinMaxScaler` to `[0, π]` rather than standardised:
-under `RY(x)`, values beyond ±π alias, mapping distinct points onto the same
-quantum state. Validation and test may fall slightly outside the range and are
-deliberately **not clipped** — clipping would pretend the training set had seen
-an extremum it never saw.
-
-## Install
-
-```bash
+```sh
 git clone https://github.com/EduardoTBuss/vqc-depth.git
 cd vqc-depth
-pip install -r requirements.txt
-pip install -e .
-pytest -q
+python -m venv .venv
 ```
 
-Python ≥ 3.10. **CPU is enough** — four qubits on `default.qubit` will not touch
-a GPU.
+Activate the environment with `source .venv/bin/activate` on Linux/macOS or
+`.\.venv\Scripts\Activate.ps1` in PowerShell.
 
-## Usage
-
-```bash
-python -m vqcdepth --part train|rebuild|plot|tables|all|status --outdir DIR
-    [--datasets ...] [--models ...] [--seeds ...] [--epochs N] [--no-checkpoint]
+```sh
+python -m pip install -r requirements.txt
+python -m pip install -e .
+python -m pytest
+python -m vqcdepth --part all --outdir outputs/pilot --datasets banknote --models vqc1 --seeds 0 --epochs 2 --no-checkpoint --stop-on-error
 ```
 
-The output root always comes from `--outdir`; no path is hardcoded, which is
-what allows writing straight to Google Drive from Colab.
+The test suite uses cached datasets by default. Set the environment variable
+`VQCDEPTH_ALLOW_DOWNLOAD=1` to enable the dataset-backed tests on a fresh clone.
+The pilot trains one model and writes metrics, tables, and figures under
+`outputs/pilot/`.
 
-```bash
-# what is still missing (trains nothing)
-python -m vqcdepth --part status --outdir ./out
+## Reproduce the study
 
-# quick pilot
-python -m vqcdepth --part train --outdir ./out \
-    --datasets banknote --models vqc1 --seeds 0 1 --epochs 10
-
-# full grid — resumable, re-run at will
-python -m vqcdepth --part train --outdir ./out
-
-# CSVs, tables and figures — all work on a PARTIAL grid
-python -m vqcdepth --part rebuild --outdir ./out
-python -m vqcdepth --part tables  --outdir ./out
-python -m vqcdepth --part plot    --outdir ./out
+```sh
+python -m vqcdepth --part all --outdir outputs/paper --stop-on-error
+python -m vqcdepth --part status --outdir outputs/paper
 ```
 
-The grid is partitionable by dataset, model and seed, so it can be split across
-runtimes. To run it on Colab with everything persisted to Drive, see
-[COLAB.md](COLAB.md) and `notebooks/ERAMIA_launcher.ipynb`.
+The main grid uses 100 epochs and batch size 16. CPU time depends on the
+machine. The local pilot used for planning estimated about 82 minutes for
+the sequential grid. The same command resumes from completed run records.
+Use separate output directories whenever you change epochs, batch size, or
+learning rate. The resume key for those settings stays `dataset__model__seedNN`.
 
-## Persistence and resuming
+For the exploratory MLP learning-rate check, use its own directory.
 
-- **One file per run**, id `dataset__model__seedNN` (e.g.
-  `banknote__vqc4__seed07`), written atomically (`tmp` + `os.replace`).
-- Reopening a session means scanning what exists and running only what is
-  missing.
-- **No shared CSV is ever appended to**: Drive plus two runtimes is a recipe for
-  silent corruption. CSVs are *rebuilt* from the per-run files, and the rebuild
-  works on a partial grid.
-- Resuming is **per run, not per epoch**. Runs are short enough that intra-run
-  resume would be over-engineering; the every-5-epochs checkpoints are an
-  **experimental artefact**, not a recovery mechanism.
-
-Each run stores final metrics, the history of **every** epoch, per-sample
-predictions, the confusion matrix as numbers, parameter counts, training and
-inference times, the split hashes, and an `env.json` describing the environment.
-
-Gradient and parameter norms are recorded per epoch as an exploratory extra —
-useful for *observing* whether deeper circuits optimise worse, but **not an
-objective of the study**.
-
-## Outside the paper's scope: `--diff-method` and `--shots`
-
-These exist as a capability, not as variables of the study. The published grid
-uses backprop on an analytic simulator.
-
-```bash
-# reproduce the methodological claim (same gradient, ~10x the cost)
-python -m vqcdepth --part train --outdir ./out --diff-method parameter-shift
-
-# shot-noise extension (requires parameter-shift)
-python -m vqcdepth --part train --outdir ./out \
-    --diff-method parameter-shift --shots 1024
+```sh
+python -m vqcdepth --part all --outdir outputs/mlp-lr-001 --models mlp --lr 0.001 --stop-on-error
 ```
 
-On an ideal simulator both methods return *the same* gradient — measured
-difference ~1e-16, i.e. float64 noise — at very different costs:
+The paper's sensitivity run used Windows, Python 3.11, and PyTorch 2.7.1.
+Compare it descriptively because the execution environment also changed.
+See [paper/](paper/) for the recorded environments and per-run metrics.
 
-| | backprop | parameter-shift |
-|---|---:|---:|
-| circuit executions per step (batch 16, L=1) | **16** | 272 |
-| same, L=4 | **16** | 1040 |
-| time per step, L=4 | **33.8 ms** | 356.1 ms |
-| full grid | **~82 min** | ~11.6 h |
+The CLI supports `status`, `train`, `rebuild`, `tables`, `plot`, and `all`.
+Run `python -m vqcdepth --help` for model, dataset, and seed filters. The
+`--diff-method` and `--shots` flags support additional experiments. The paper
+uses analytic backpropagation on PennyLane's `default.qubit` simulator.
 
-Parameter-shift is mandatory on real hardware, where no statevector exists to
-differentiate — only measurements. `tests/test_diffmethod_shots.py` keeps the
-equivalence under test, so the justification cannot quietly rot.
+## Experimental protocol
 
-Non-default configurations get a suffixed `run_id`
-(`banknote__vqc4__seed07__shots1024__parametershift`); without it a shot-noise
-run would overwrite the analytic run of the same cell and the rebuilt CSV would
-mix two experiments in one row. Test-set inference is always analytic, even when
-training used shots, so optimisation noise and measurement noise do not blur
-into a single metric.
+| Dataset | CLI name | Rows | Features used |
+|---|---|---:|---|
+| [Banknote Authentication](https://doi.org/10.24432/C55P57) | `banknote` | 1,372 | Variance, skewness, curtosis, entropy |
+| [Blood Transfusion Service Center](https://doi.org/10.24432/C5GS39) | `blood` | 748 | Recency, Frequency, Monetary, Time |
+| [Mammographic Mass](https://doi.org/10.24432/C53K6Z) | `mammographic` | 961 | Age, Shape, Margin, Density |
 
-## Layout
+- **Splits.** Seeds 0–9 each define a stratified 70/15/15 train/validation/test
+  split shared by all four models. Median imputation and min–max scaling are
+  fitted on the training fold. The scaler maps that fold to `[0, π]`, and
+  held-out values retain their transformed values. Mammographic excludes
+  BI-RADS and treats Shape and Margin codes numerically. Blood's Monetary
+  column is exactly 250 times Frequency.
+- **Models.** The circuit encodes the four features once with `RY`. Depth
+  counts repetitions of `RZ`, then `RY` on each qubit, followed by CNOTs
+  `3→2`, `2→1`, `1→0`. VQC-1/2/4 have 8/16/32 trainable angles. The readout
+  maps the probability of qubit 0 being in state `|0⟩` to the positive class
+  via `(1 + ⟨Z₀⟩) / 2`. The MLP is `4→8→4→1`, with ReLU hidden layers,
+  a sigmoid output, and 81 parameters.
+- **Training and evaluation.** All main runs use binary cross-entropy, Adam
+  with learning rate 0.05, and a classification threshold of 0.5. Validation
+  F1 selects the checkpoint, with validation loss breaking ties. The test
+  fold supplies positive-class F1 and ROC AUC.
+- **Statistics.** Wilcoxon tests pair models by seed. Holm adjustment applies
+  separately to the three depth comparisons and the three VQC–MLP comparisons
+  for each dataset and metric. The test folds overlap across seeds, so the
+  tests are exploratory and conditional on those resamples.
 
-```
-vqc-depth/
-├── src/vqcdepth/   the package: every piece of logic lives here
-├── tests/          the suite that gates the grid (187 tests)
-├── notebooks/      thin Colab launcher, generated by _build_launcher.py
-├── paper/          the manuscript, after acceptance (empty during review)
-├── data/           cache for the UCI downloads (gitignored, never versioned)
-├── COLAB.md        how to run the grid on Colab, cell by cell
-├── requirements.txt
-└── pyproject.toml
-```
+## Repository and outputs
 
-Nothing is hardcoded to a location: the output root is always `--outdir`, which
-is what lets the same code write to a local folder or straight to Google Drive.
+| Path | Contents |
+|---|---|
+| [src/vqcdepth/](src/vqcdepth/) | Data loaders, splits, models, training, CLI, and analysis |
+| [tests/](tests/) | Circuit, preprocessing, training, and resume checks |
+| [notebooks/](notebooks/) | Colab launcher and its source generator |
+| [paper/](paper/) | Paper citation, original per-run metrics, and environment details |
 
-```
-src/vqcdepth/
-├── config.py     every experimental constant; no other module defines one
-├── data.py       the three UCI loaders, ids verified at load time
-├── splits.py     deterministic 70/15/15, leak-free preprocessing, index hashes
-├── circuits.py   the VQCs; batched evaluation via parameter broadcasting
-├── models.py     the classical MLP baseline
-├── train.py      the training loop, structurally identical for both families
-├── storage.py    atomic writes, one file per run, scan-based resuming
-├── runner.py     grid orchestration
-├── tables.py     CSV rebuild, aggregation, paired Wilcoxon with Holm correction
-├── figures.py    all figures, in PDF and PNG
-└── cli.py        the command line interface
-```
-
-## Reproducibility
-
-- All randomness flows through **explicit generators** seeded by
-  `(seed, dataset, model)`. No global RNG is used — no `np.random.seed`, no
-  `torch.manual_seed`.
-- Python's built-in `hash()` is never used to derive seeds: it is randomised per
-  process, which would produce different splits across sessions. Everything goes
-  through `hashlib`.
-- Split stability across processes is verified by a test that spawns
-  subprocesses with different `PYTHONHASHSEED` values.
-- `env.json` records package versions and hardware for every run. That file, not
-  `requirements.txt`, is what belongs in a reproducibility statement.
-- The suite doubles as the gate before the grid: it proves that the vectorised
-  circuit matches the per-sample loop in value *and* gradient, that all four
-  models of a cell share indices, and that the test set never reaches the
-  preprocessing.
-
-## Limitations
-
-Ideal simulator (no noise, no shots), three datasets, four qubits, a single
-ansatz family, a baseline MLP deliberately left untuned, and **no claim of
-quantum advantage**.
+Each output directory contains `runs/` (the per-run JSON records used for
+resuming), `results/` (rebuilt CSVs), `predictions/`, `checkpoints/`,
+`tables/`, `figures/`, and `env.json` (environment metadata). Rebuild and
+analysis commands also work with a partial grid. Parallel workers should
+train disjoint subsets, with one process generating the shared tables and
+figures after training.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+The software and its documentation are available under the [MIT License](LICENSE).
+UCI provides the three datasets separately under CC BY 4.0. Follow each dataset
+link for its citation and license details.

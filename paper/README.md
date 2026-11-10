@@ -1,42 +1,28 @@
-# Paper
+# Paper and results
 
-This folder is **deliberately empty of a manuscript** for now.
+Eduardo Timm Buss, Diogo Pereira Ribeiro, Miguel Rosa, Ramiro Paz, Hélida Santos,
+and Renata Reiser. **Circuit Depth in Variational Quantum Classifiers:
+Performance, Stability, and a Classical MLP Baseline.** Accepted at
+[ERAMIA-RS 2026](https://eramia-rs.sbc.org.br/2026/).
 
-## Why it is empty
+## Per-run metrics
 
-The study is under submission to **ERAMIA-RS 2026**, which is **double-blind**.
-Publishing the manuscript — or linking this repository from it — while the paper
-is under review would break anonymity. So, during review:
+| File | Contents |
+|---|---|
+| [main_runs.csv](main_runs.csv) | 120 runs across three datasets, four models, and seeds 0–9, all at learning rate 0.05 |
+| [mlp_sensitivity_runs.csv](mlp_sensitivity_runs.csv) | 30 MLP runs across three datasets and seeds 0–9 at learning rate 0.001 |
 
-- the PDF is **not** versioned here;
-- the paper does **not** cite this repository, this URL or the author's name;
-- the repository stays **private**.
+Each row contains test metrics, validation checkpoint metrics, confusion
+counts, model size, training settings, durations in seconds, and split hashes.
+Group by `dataset` and `model` to reproduce mean and sample standard deviation.
+Pair comparisons by `dataset` and `seed` and verify the shared splits with
+`split_hash_all`. The exports omit execution timestamps.
 
-## What goes here after acceptance
+The main grid used Linux, Python 3.13.15, PennyLane 0.44.1, PyTorch 2.11.0+cpu,
+NumPy 2.1.3, and scikit-learn 1.7.0. The exploratory MLP grid used Windows,
+Python 3.11, and PyTorch 2.7.1. The environment difference makes that comparison
+descriptive.
 
-Once the paper is accepted, drop the camera-ready PDF in this folder as
-`vqc-depth-eramia-2026.pdf` and it becomes the entry point that explains the
-numbers this code produces.
-
-## Going public: checklist
-
-The repository is meant to become public *after* acceptance, not before. In
-order:
-
-1. **Acceptance confirmed** and the camera-ready is final.
-2. Add the PDF to this folder and link it from the root `README.md`.
-3. Re-read the whole repository for anything that should not be public — the
-   test suite and the CI are already clean, but data caches, output folders and
-   personal paths are only kept out by `.gitignore`, so verify with
-   `git ls-files` rather than by looking at the working tree.
-4. Flip the repository to public.
-5. Only then add the repository URL to the paper (camera-ready or a later
-   version), since it is no longer blind.
-6. Optional but cheap: archive a tagged release on Zenodo to get a DOI, and
-   add a `CITATION.cff` pointing at it.
-
-## What this code does and does not contain
-
-Code only. No downloaded datasets, no run outputs, no figures and no tables are
-versioned — everything under `--outdir` is generated, and reproducing it is a
-matter of running the grid. See the root [README](../README.md).
+The [reproduction commands](../README.md#reproduce-the-study) generate further
+artifacts, including training histories and per-sample predictions. Use
+[CITATION.cff](../CITATION.cff) to cite the software.

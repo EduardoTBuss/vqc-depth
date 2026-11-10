@@ -18,12 +18,7 @@ runs the test gate, measures a pilot and fires the grid.
 
 **Use a CPU runtime.** Four qubits on `default.qubit` will not touch a GPU.
 
-**Two things are yours before *Runtime -> Run all*, and nothing else works without
-them:**
-1. **Secret `GH_PAT`** (key icon in the sidebar): a GitHub *fine-grained PAT*
-   scoped to the `vqc-depth` repository, **`Contents: Read-only`** and nothing
-   else. Turn *Notebook access* on. Cell 2 stops here if it is missing.
-2. Cell 1 asks for **Google Drive authorisation**.
+Authorize **Google Drive** in cell 1 to save results and resume later.
 
 **Expected cost (measured locally): ~82 min there -> ~2 to 2.7 h here.** Cell 5
 re-measures it on the machine you actually got, before the grid is fired.
@@ -85,85 +80,17 @@ def run(args, log=None, env=None, check=True):
 """),
 
 md("""
-## 2 - Private repository, via Colab Secrets
+## 2 - Clone the public repository
 
-**Before running**, create the secret in Colab (key icon in the sidebar):
-- Name: `GH_PAT`
-- Value: a **fine-grained PAT** scoped to this repository only, with
-  **`Contents: Read-only`** and nothing else.
-- Enable *Notebook access*.
-
-The token is never typed into a cell, never printed and never committed. The
-clone error is suppressed on purpose: git echoes the URL, which contains the
-token. The remote is rewritten right after cloning so the token is not left in
-`.git/config`.
+The notebook prints the Git commit used for the session.
 """),
 code("""
-import getpass, subprocess
+import tempfile
 
-GH_USER, REPO = 'EduardoTBuss', 'vqc-depth'
-
-# The secret is read OUTSIDE the except block on purpose. Raising SystemExit
-# from inside a handler chains the exceptions, and IPython's traceback
-# formatter crashes on that chain with a TypeError in find_recursion, which
-# buries the only message that actually tells you what to do.
-_pat, _why = None, ''
-try:
-    from google.colab import userdata
-    _pat = userdata.get('GH_PAT')
-except Exception as e:
-    _why = f'{type(e).__name__}: {e}'
-
-if not _pat:
-    print('=' * 72)
-    print('The Colab secret GH_PAT is not available.')
-    if _why:
-        print(_why)
-    print('')
-    print('Preferred fix, done once per Google account (about a minute):')
-    print('  1. key icon in the left sidebar  ->  + Add new secret')
-    print('  2. Name: GH_PAT   (exactly this, case sensitive)')
-    print('  3. Value: a GitHub fine-grained PAT scoped to the vqc-depth repo,')
-    print('     Repository permissions -> Contents: Read-only. Create one at')
-    print('     https://github.com/settings/personal-access-tokens/new')
-    print('  4. turn "Notebook access" ON for this notebook')
-    print('  5. re-run this cell')
-    print('')
-    print('Or paste the token once, right now, to keep going without the')
-    print('secret. It is hidden while typing and never stored or printed.')
-    print('Press Enter on an empty prompt to stop instead.')
-    print('=' * 72)
-    try:
-        _pat = getpass.getpass('GH_PAT (hidden): ').strip()
-    except Exception:
-        _pat = None
-
-if not _pat:
-    print('')
-    print('No token available, so nothing was cloned. Set the secret as')
-    print('described above and re-run this cell.')
-    raise SystemExit
-
-import os, shutil
-REPO_DIR = f'/content/{REPO}'
-shutil.rmtree(REPO_DIR, ignore_errors=True)
-_url = f'https://{GH_USER}:{_pat}@github.com/{GH_USER}/{REPO}.git'
-r = subprocess.run(['git', 'clone', '--quiet', _url, REPO_DIR],
-                   capture_output=True, text=True)
-del _pat, _url
-if r.returncode != 0:
-    print('git clone failed. The real message is suppressed because git echoes')
-    print('the URL, and the URL carries the token. Check, in this order:')
-    print('  - the token has not expired')
-    print('  - Repository access covers EduardoTBuss/vqc-depth specifically')
-    print('  - Repository permissions -> Contents is at least Read-only')
-    print('  - the repository name is still vqc-depth')
-    raise SystemExit
-
+REPO_URL = 'https://github.com/EduardoTBuss/vqc-depth.git'
+REPO_DIR = tempfile.mkdtemp(prefix='vqc-depth-', dir='/content')
+run(['git', 'clone', '--quiet', REPO_URL, REPO_DIR])
 os.chdir(REPO_DIR)
-print('working directory:', os.getcwd())
-run(['git', 'remote', 'set-url', 'origin',
-     f'https://github.com/{GH_USER}/{REPO}.git'])
 run(['git', 'log', '--oneline', '-1'])
 """),
 
@@ -243,13 +170,13 @@ print('all runtime dependencies import cleanly')
 md("""
 ## 4 - Gate: the test suite
 
-**If this fails, do not run the grid.** It proves that the vectorised circuit
+**If this fails, do not run the grid.** It checks that the vectorised circuit
 returns the same value and the same gradient as the per-sample loop, that all
 four models of a `(dataset, seed)` cell receive literally the same indices, that
 the test set never reached the preprocessing, and that no angle of the ansatz is
 inert.
 
-`VQCDEPTH_ALLOW_DOWNLOAD=1` matters: without it the 18 tests that fetch the UCI
+`VQCDEPTH_ALLOW_DOWNLOAD=1` matters: without it the tests that fetch the UCI
 datasets are skipped on a fresh clone, and the gate is weaker than it looks.
 """),
 code("""
@@ -264,48 +191,38 @@ md("""
 ## 5 - Pilot: the cell that measures time
 
 Two short runs of the most expensive model. Confirms that files reach Drive and
-measures seconds per epoch here, rather than trusting a number measured
-elsewhere.
+measures seconds per epoch in this session. Each pilot uses its own folder
+on Drive, separate from the main grid.
 """),
 code("""
 import time
+from pathlib import Path
+
+pilots = Path(DRIVE) / 'pilots'
+pilots.mkdir(exist_ok=True)
+pilot_dir = Path(tempfile.mkdtemp(prefix='pilot-', dir=pilots))
 LOG = f'{DRIVE}/logs/pilot_{time.strftime("%Y%m%d_%H%M%S")}.log'
 
-run([sys.executable, '-m', 'vqcdepth', '--part', 'train', '--outdir', DRIVE,
+run([sys.executable, '-m', 'vqcdepth', '--part', 'train', '--outdir', str(pilot_dir),
      '--datasets', 'banknote', '--models', 'vqc4', '--seeds', '0', '1',
-     '--epochs', '5'], log=LOG)
+     '--epochs', '5', '--no-checkpoint', '--stop-on-error'], log=LOG)
 """),
 code("""
-# Extrapolation from what was just measured; nothing here is guessed.
-import json, glob
+import json
 
 ts = []
-for p in glob.glob(f'{DRIVE}/runs/banknote__vqc4__seed0[01].json'):
-    r = json.load(open(p))
-    ts.append(r['training_time_seconds'] / r['final_epoch'])
+for path in (pilot_dir / 'runs').glob('banknote__vqc4__seed0[01].json'):
+    record = json.loads(path.read_text(encoding='utf-8'))
+    ts.append(record['training_time_seconds'] / record['final_epoch'])
 
-if not ts:
-    print('no pilot run found -- check the previous cell')
-else:
-    s = sum(ts) / len(ts)
-    # vqc4 is ~55% of the grid cost; scale by training-set size across datasets
-    total_h = (s * 100 * 10 * (961 + 523 + 672) / 961) / 0.55 / 3600
-    print(f'vqc4/banknote: {s:.2f} s/epoch  ->  one 100-epoch run = {s*100/60:.1f} min')
-    print(f'ESTIMATE for the full grid (120 runs): {total_h:.1f} h')
-    print('\\nIf that exceeds ~4 h, split the grid using cell 6b.')
-"""),
-code("""
-# The pilot ran with --epochs 5, so these runs are NOT paper-grade. Delete them
-# before the real grid, otherwise the resume logic treats them as finished.
-import glob, os, shutil
+if len(ts) != 2:
+    raise RuntimeError('Expected two pilot results. Run the previous cell again.')
 
-for pat in ['runs/banknote__vqc4__seed0[01]*', 'predictions/banknote__vqc4__seed0[01]*']:
-    for p in glob.glob(f'{DRIVE}/{pat}'):
-        os.remove(p); print('removed', os.path.basename(p))
-for d in glob.glob(f'{DRIVE}/checkpoints/banknote__vqc4__seed0[01]'):
-    shutil.rmtree(d); print('removed', os.path.basename(d))
-
-run([sys.executable, '-m', 'vqcdepth', '--part', 'status', '--outdir', DRIVE])
+s = sum(ts) / len(ts)
+# vqc4 represented about 55% of grid cost in the original pilot.
+total_h = (s * 100 * 10 * (961 + 523 + 672) / 961) / 0.55 / 3600
+print(f'vqc4/banknote: {s:.2f} s/epoch, about {s*100/60:.1f} min per 100-epoch run')
+print(f'Estimated full grid time (120 runs): {total_h:.1f} h')
 """),
 
 md("""
@@ -318,13 +235,13 @@ code("""
 import time
 LOG = f'{DRIVE}/logs/grid_{time.strftime("%Y%m%d_%H%M%S")}.log'
 
-run([sys.executable, '-m', 'vqcdepth', '--part', 'train', '--outdir', DRIVE],
-    log=LOG)
+run([sys.executable, '-m', 'vqcdepth', '--part', 'train', '--outdir', DRIVE,
+     '--stop-on-error'], log=LOG)
 """),
 md("""
 ### 6b - Optional: split the grid
 
-Each run is its own file, so there is no race between runtimes.
+Use disjoint subsets across runtimes and generate the shared tables and figures once training finishes.
 """),
 code("""
 # for _ds in ['banknote', 'blood', 'mammographic']:
@@ -373,9 +290,8 @@ Everything lives under `/content/drive/MyDrive/ERAMIA-VQC`:
 - `tables/*.csv|.md|.tex` - ready for LaTeX
 - `figures/*.pdf` - vector, for the paper
 
-**Nothing is lost if Colab dies mid-run**: re-run cell 6.
-
-Bring these files back and the next session produces the figures, the tables and the text.
+After a disconnect, run the setup cells again and resume from cell 6.
+Completed runs are kept and an interrupted run restarts from its first epoch.
 """),
 ]
 

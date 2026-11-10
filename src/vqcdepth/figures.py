@@ -236,7 +236,8 @@ def plot_auc_by_model_boxplot(outdir) -> Path | None:
 # -- 4-5: training curves aggregated over seeds (mean +- std) -----------
 
 def _mean_std_curves(
-    outdir, value_col: str, ylabel: str, name: str, *, min_seeds: int = 2
+    outdir, value_col: str, ylabel: str, name: str, *, min_seeds: int = 2,
+    clip: tuple[float | None, float | None] | None = None,
 ) -> Path | None:
     hist = _load_history(outdir)
     if hist is None:
@@ -277,7 +278,18 @@ def _mean_std_curves(
             ax.plot(agg.index, agg["mean"], color=style["color"],
                      linestyle=style["linestyle"], marker=None, label=style["label"])
             std = agg["std"].fillna(0.0)
-            ax.fill_between(agg.index, agg["mean"] - std, agg["mean"] + std,
+            band_lo = agg["mean"] - std
+            band_hi = agg["mean"] + std
+            # The +-1 sd band is a VISUAL device only: it must never leave the
+            # metric's valid domain (e.g. F1 in [0, 1], loss/norm in [0, inf)).
+            # Clipping here touches only the drawn band, never agg/raw data.
+            if clip is not None:
+                lo, hi = clip
+                if lo is not None:
+                    band_lo = band_lo.clip(lower=lo)
+                if hi is not None:
+                    band_hi = band_hi.clip(upper=hi)
+            ax.fill_between(agg.index, band_lo, band_hi,
                              color=style["color"], alpha=0.15, linewidth=0)
             drawn_here = True
         if drawn_here:
@@ -311,15 +323,21 @@ def plot_val_loss_curves(outdir) -> Path | None:
     """Val_loss per epoch, mean over seeds +-1 std, four models per axis.
 
     Central figure of the paper. A model with fewer than 2 seeds is omitted
-    rather than drawn with a variance estimated from a single sample.
+    rather than drawn with a variance estimated from a single sample. The
+    +-1 sd band is clipped to [0, inf): log-loss cannot be negative, so a
+    band dipping below 0 would be a plotting artifact, not a data value.
     """
-    return _mean_std_curves(outdir, "val_loss", "Val. loss", "val_loss_curves")
+    return _mean_std_curves(outdir, "val_loss", "Val. loss", "val_loss_curves",
+                             clip=(0.0, None))
 
 
 def plot_val_f1_curves(outdir) -> Path | None:
     """Val_f1 per epoch, mean over seeds +-1 std; same reading as
-    `val_loss_curves`, on the primary metric of the study."""
-    return _mean_std_curves(outdir, "val_f1", "Val. F1", "val_f1_curves")
+    `val_loss_curves`, on the primary metric of the study. The +-1 sd band is
+    clipped to [0, 1], the valid range of F1; it may not exceed it visually.
+    """
+    return _mean_std_curves(outdir, "val_f1", "Val. F1", "val_f1_curves",
+                             clip=(0.0, 1.0))
 
 
 def plot_gradient_norm_curves(outdir) -> Path | None:
@@ -327,16 +345,19 @@ def plot_gradient_norm_curves(outdir) -> Path | None:
 
     Exploratory only (RQ1 is about F1 vs depth): a qualitative look at whether
     deeper circuits optimize worse. Not confirmatory without a dedicated test.
+    A norm is never negative, so the band is clipped to [0, inf) as well.
     """
     return _mean_std_curves(outdir, "gradient_norm", "Gradient norm",
-                             "gradient_norm_curves")
+                             "gradient_norm_curves", clip=(0.0, None))
 
 
 # -- 6: F1 vs depth (RQ1) -----------------------------------------------
 
 def plot_f1_vs_depth(outdir) -> Path | None:
     """Test_f1 (mean +- std) vs VQC depth (1, 2, 4), with the MLP as a
-    horizontal reference. Answers RQ1 directly."""
+    horizontal reference. Answers RQ1 directly. F1 in [0, 1]: the whiskers
+    and the MLP reference band are clipped to that range so a large sd never
+    draws an impossible F1 value."""
     df = _load_raw_results(outdir)
     if df is None:
         return None
@@ -377,7 +398,13 @@ def plot_f1_vs_depth(outdir) -> Path | None:
             means = np.array(means)[order]
             stds = np.array(stds)[order]
             style = _model_style("vqc1")
-            ax.errorbar(depths, means, yerr=stds, color=style["color"],
+            # F1 in [0, 1]: the +-1 sd whisker must not be drawn past that
+            # range, so the lower/upper reach is clipped before turning it
+            # back into a (possibly asymmetric) yerr for errorbar().
+            lower = np.clip(means - stds, 0.0, 1.0)
+            upper = np.clip(means + stds, 0.0, 1.0)
+            yerr = np.vstack([means - lower, upper - means])
+            ax.errorbar(depths, means, yerr=yerr, color=style["color"],
                          marker="o", linestyle="-", capsize=3, label="VQC")
             ax.set_xticks(sorted(set(int(d) for d in depths)))
         mlp_vals = sub.loc[sub["model"] == "mlp", "test_f1"].dropna().values
@@ -388,7 +415,11 @@ def plot_f1_vs_depth(outdir) -> Path | None:
             style = _model_style("mlp")
             ax.axhline(mlp_mean, color=style["color"], linestyle=style["linestyle"],
                         label="MLP (ref.)")
-            ax.axhspan(mlp_mean - mlp_std, mlp_mean + mlp_std, color=style["color"],
+            # Same [0, 1] clipping as the VQC whiskers above, for the same
+            # reason: an F1 band cannot visually leave the metric's range.
+            span_lo = float(np.clip(mlp_mean - mlp_std, 0.0, 1.0))
+            span_hi = float(np.clip(mlp_mean + mlp_std, 0.0, 1.0))
+            ax.axhspan(span_lo, span_hi, color=style["color"],
                         alpha=0.12, linewidth=0)
         if len(depths) == 0 and len(mlp_vals) == 0:
             ax.text(0.5, 0.5, "no data", ha="center", va="center",
